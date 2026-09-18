@@ -1,0 +1,23 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "dbsKioskPi verbinden",
+        "description": "Gib die IP-Adresse und die Anmeldedaten des Raspberry Pi Kiosks ein:",
+        "data": {
+          "host": "IP-Adresse / Hostname",
+          "port": "Port",
+          "username": "Benutzername (z. B. pi)",
+          "password": "Passwort"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zu dbsKioskPi fehlgeschlagen. Bitte IP-Adresse und Port prüfen.",
+      "invalid_auth": "Ungültiger Benutzername oder Passwort."
+    },
+    "abort": {
+      "already_configured": "Dieses dbsKioskPi-Gerät ist bereits konfiguriert."
+    }
+  }
+}

@@ -321,7 +321,67 @@ manage_kiosk_service() {
 }
 
 # ------------------------------------------------------------------------------
-# 5. Systemstatus anzeigen
+# 5. Schulglocke & Audio-Einstellungen
+# ------------------------------------------------------------------------------
+configure_audio() {
+    while true; do
+        # shellcheck disable=SC1090
+        source "$CONFIG_FILE"
+
+        local bell_status="Keine MP3 vorhanden"
+        if [ -f "/var/lib/dbskiosk/sounds/bell.mp3" ]; then
+            bell_status="MP3 vorhanden ($(du -h /var/lib/dbskiosk/sounds/bell.mp3 | cut -f1))"
+        fi
+
+        local choice
+        choice=$(whiptail --backtitle "$WT_BACKTITLE" \
+            --title "Schulglocke & Audio-Einstellungen" \
+            --menu "Status: $bell_status\nLautstärke: ${BELL_VOLUME:-100}%\n\nWähle eine Aktion:" 17 70 5 \
+            "1" "TEST: Schulglocke JETZT abspielen" \
+            "2" "Standard-Lautstärke ändern (${BELL_VOLUME:-100}%)" \
+            "3" "Pfad zur Schulglocken-MP3 anzeigen" \
+            "4" "API-Dienststatus für Home Assistant prüfen" \
+            "5" "Zurück" 3>&1 1>&2 2>&3)
+
+        if [ $? -ne 0 ] || [ "$choice" = "5" ]; then
+            break
+        fi
+
+        case "$choice" in
+            1)
+                whiptail --backtitle "$WT_BACKTITLE" --infobox "Spiele Schulglocke ab..." 6 50
+                /usr/local/bin/dbs-bell play "${BELL_VOLUME:-100}"
+                msg_box "Abgespielt" "Audioausgabe wurde durchgeführt."
+                ;;
+            2)
+                local new_vol
+                new_vol=$(whiptail --backtitle "$WT_BACKTITLE" --title "Lautstärke ändern" \
+                    --inputbox "Gib die Standardlautstärke in Prozent ein (1-100):" 10 60 "${BELL_VOLUME:-100}" 3>&1 1>&2 2>&3)
+                if [ -n "$new_vol" ]; then
+                    if grep -q '^BELL_VOLUME=' "$CONFIG_FILE"; then
+                        sed -i "s|^BELL_VOLUME=.*|BELL_VOLUME=\"$new_vol\"|" "$CONFIG_FILE"
+                    else
+                        echo "BELL_VOLUME=\"$new_vol\"" >> "$CONFIG_FILE"
+                    fi
+                    msg_box "Gespeichert" "Standardlautstärke auf ${new_vol}% gesetzt."
+                fi
+                ;;
+            3)
+                local sound_info
+                sound_info=$(/usr/local/bin/dbs-bell status)
+                msg_box "Glockendatei Information" "$sound_info\n\nTipp: Eine MP3 kann auch direkt per Home Assistant hochgeladen werden."
+                ;;
+            4)
+                local api_stat
+                api_stat=$(systemctl status dbs-api.service 2>&1 || true)
+                whiptail --backtitle "$WT_BACKTITLE" --title "Home Assistant API Dienst" --scrolltext --msgbox "$api_stat" 18 78
+                ;;
+        esac
+    done
+}
+
+# ------------------------------------------------------------------------------
+# 6. Systemstatus anzeigen
 # ------------------------------------------------------------------------------
 show_system_info() {
     local host_name
@@ -367,17 +427,18 @@ main_menu() {
         local choice
         choice=$(whiptail --backtitle "$WT_BACKTITLE" \
             --title "dbsKioskPi Konfigurationsmenü" \
-            --menu "IP: ${current_ip:-Nicht verbunden} | Kiosk-Status: $(systemctl is-active kiosk.service 2>/dev/null || echo 'unbekannt')\n\nBitte Option wählen:" 18 70 7 \
+            --menu "IP: ${current_ip:-Nicht verbunden} | Kiosk-Status: $(systemctl is-active kiosk.service 2>/dev/null || echo 'unbekannt')\n\nBitte Option wählen:" 19 72 8 \
             "1" "WLAN einrichten (Scan & Verbinden)" \
             "2" "Kiosk Ziel-URL ändern" \
             "3" "HDMI-CEC TV-Steuerung & Zeitplan" \
             "4" "Kiosk-Dienst verwalten (Logs, Restart)" \
-            "5" "System- & Netzwerkstatus anzeigen" \
-            "6" "Raspberry Pi NEUSTARTEN" \
-            "7" "Raspberry Pi HERUNTERFAHREN" \
-            "8" "Beenden" 3>&1 1>&2 2>&3)
+            "5" "Schulglocke & Audio testen (MP3)" \
+            "6" "System- & Netzwerkstatus anzeigen" \
+            "7" "Raspberry Pi NEUSTARTEN" \
+            "8" "Raspberry Pi HERUNTERFAHREN" \
+            "9" "Beenden" 3>&1 1>&2 2>&3)
 
-        if [ $? -ne 0 ] || [ "$choice" = "8" ]; then
+        if [ $? -ne 0 ] || [ "$choice" = "9" ]; then
             break
         fi
 
@@ -386,14 +447,15 @@ main_menu() {
             2) configure_url ;;
             3) configure_cec ;;
             4) manage_kiosk_service ;;
-            5) show_system_info ;;
-            6)
+            5) configure_audio ;;
+            6) show_system_info ;;
+            7)
                 if whiptail --backtitle "$WT_BACKTITLE" --yesno "Möchtest du das System wirklich jetzt neustarten?" 10 50; then
                     reboot
                     exit 0
                 fi
                 ;;
-            7)
+            8)
                 if whiptail --backtitle "$WT_BACKTITLE" --yesno "Möchtest du das System wirklich jetzt herunterfahren?" 10 50; then
                     poweroff
                     exit 0

@@ -1,0 +1,11 @@
+{
+  "domain": "dbs_kiosk",
+  "name": "dbsKioskPi",
+  "codeowners": ["@dbsKioskPi"],
+  "config_flow": true,
+  "documentation": "https://github.com/dbsKioskPi",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "version": "1.0.0",
+  "requirements": []
+}

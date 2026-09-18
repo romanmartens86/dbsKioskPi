@@ -1,0 +1,45 @@
+play_bell:
+  name: Schulglocke läuten
+  description: Spielt die hinterlegte MP3-Schulglocke auf dem dbsKioskPi ab.
+  fields:
+    volume:
+      name: Lautstärke
+      description: Lautstärke in Prozent (1 bis 100).
+      required: false
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 100
+          unit_of_measurement: "%"
+
+upload_bell:
+  name: Schulglocke MP3 übertragen
+  description: Überträgt eine MP3-Datei von Home Assistant auf den dbsKioskPi.
+  fields:
+    file_path:
+      name: Lokaler Dateipfad
+      description: Absoluter Pfad zur MP3-Datei in Home Assistant (z. B. /media/schulglocke.mp3 oder /config/bell.mp3).
+      required: true
+      example: "/media/schulglocke.mp3"
+      selector:
+        text:
+
+set_screen_schedule:
+  name: TV-Zeitplan einstellen
+  description: Setzt die tägliche Einschaltzeit und Standby-Zeit für den Fernseher via HDMI-CEC.
+  fields:
+    on_time:
+      name: Einschaltzeit
+      description: Uhrzeit im Format HH:MM (z. B. 07:00).
+      required: false
+      example: "07:00"
+      selector:
+        time:
+    off_time:
+      name: Ausschaltzeit (Standby)
+      description: Uhrzeit im Format HH:MM (z. B. 19:00).
+      required: false
+      example: "19:00"
+      selector:
+        time:

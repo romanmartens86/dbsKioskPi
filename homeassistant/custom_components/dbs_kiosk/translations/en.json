@@ -1,0 +1,23 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect dbsKioskPi",
+        "description": "Enter the IP address and credentials for your Raspberry Pi Kiosk:",
+        "data": {
+          "host": "IP Address / Hostname",
+          "port": "Port",
+          "username": "Username (e.g. pi)",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to dbsKioskPi. Please check IP and port.",
+      "invalid_auth": "Invalid username or password."
+    },
+    "abort": {
+      "already_configured": "This dbsKioskPi device is already configured."
+    }
+  }
+}

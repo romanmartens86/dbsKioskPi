@@ -78,6 +78,9 @@ PACKAGES=(
     zram-tools
     whiptail
     network-manager
+    mpg123
+    alsa-utils
+    python3
 )
 
 apt-get install -y --no-install-recommends "${PACKAGES[@]}"
@@ -155,8 +158,10 @@ log_success "zramswap konfiguriert und neu gestartet."
 # ------------------------------------------------------------------------------
 # 5. Kiosk-Konfiguration & Hilfsskripte
 # ------------------------------------------------------------------------------
-log_info "Erstelle Konfigurationsverzeichnis /etc/dbskiosk..."
+log_info "Erstelle Konfigurationsverzeichnisse /etc/dbskiosk und /var/lib/dbskiosk/sounds..."
 mkdir -p /etc/dbskiosk
+mkdir -p /var/lib/dbskiosk/sounds
+chown -R "$TARGET_USER:$TARGET_USER" /var/lib/dbskiosk 2>/dev/null || true
 
 if [ ! -f "/etc/dbskiosk/kiosk.conf" ]; then
     cp "$SCRIPT_DIR/files/kiosk.conf" /etc/dbskiosk/kiosk.conf
@@ -175,6 +180,16 @@ chmod 755 /usr/local/bin/dbs-kiosk
 log_info "Installiere CEC-Hilfsskript (/usr/local/bin/dbs-cec)..."
 cp "$SCRIPT_DIR/files/cec-control.sh" /usr/local/bin/dbs-cec
 chmod 755 /usr/local/bin/dbs-cec
+
+# Schulglocken-Audio-Skript installieren
+log_info "Installiere Schulglocken-Audioskript (/usr/local/bin/dbs-bell)..."
+cp "$SCRIPT_DIR/files/dbs-bell.sh" /usr/local/bin/dbs-bell
+chmod 755 /usr/local/bin/dbs-bell
+
+# REST-API Daemon für Home Assistant installieren
+log_info "Installiere REST-API Daemon (/usr/local/bin/dbs-api)..."
+cp "$SCRIPT_DIR/files/dbs-api.py" /usr/local/bin/dbs-api
+chmod 755 /usr/local/bin/dbs-api
 
 # Interaktives CLI-Tool installieren
 log_info "Installiere CLI-Konfigurationstool (/usr/local/bin/dbs-config)..."
@@ -199,6 +214,10 @@ cp "$SCRIPT_DIR/files/kiosk-cec-off.service" /etc/systemd/system/
 cp "$SCRIPT_DIR/files/kiosk-cec-off.timer" /etc/systemd/system/
 chmod 644 /etc/systemd/system/kiosk-cec*
 
+# REST-API Service für Home Assistant kopieren
+cp "$SCRIPT_DIR/files/dbs-api.service" /etc/systemd/system/
+chmod 644 /etc/systemd/system/dbs-api.service
+
 systemctl daemon-reload
 
 # Boot-Target auf graphical.target setzen
@@ -206,10 +225,11 @@ log_info "Setze Boot-Target auf graphical.target..."
 systemctl set-default graphical.target
 
 # Dienste und Timer aktivieren
-log_info "Aktiviere Kiosk-Dienst und CEC-Timer..."
+log_info "Aktiviere Kiosk-Dienst, CEC-Timer und API-Dienst..."
 systemctl enable kiosk.service
 systemctl enable --now kiosk-cec-on.timer
 systemctl enable --now kiosk-cec-off.timer
+systemctl enable --now dbs-api.service
 
 # ------------------------------------------------------------------------------
 # 7. Abschluss & Zusammenfassung

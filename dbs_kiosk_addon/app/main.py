@@ -17,8 +17,10 @@ from provisioner import SSHProvisioner
 
 app = Flask(__name__)
 SETTINGS_FILE = "/data/settings.json"
+LOCAL_LOG_FILE = "/data/dbskiosk-install.log"
 if not os.path.exists("/data"):
     SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
+    LOCAL_LOG_FILE = os.path.join(os.path.dirname(__file__), "dbskiosk-install.log")
 
 # Queue for real-time log streaming
 log_queue = queue.Queue(maxsize=1000)
@@ -159,12 +161,23 @@ def start_provisioning():
         except Exception:
             break
 
+    try:
+        with open(LOCAL_LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(f"=== dbsKioskPi Installation gestartet am {time.strftime('%Y-%m-%d %H:%M:%S')} für {host} ===\n")
+    except Exception:
+        pass
+
     def run_worker():
         global is_provisioning
         is_provisioning = True
 
         def log_cb(msg):
             log_queue.put(msg)
+            try:
+                with open(LOCAL_LOG_FILE, "a", encoding="utf-8") as f:
+                    f.write(f"{msg}\n")
+            except Exception:
+                pass
 
         log_cb("[START] Starte Remote-Provisioning für dbsKioskPi...")
         prov = SSHProvisioner(host=host, port=port, username=username, password=password)
@@ -182,6 +195,132 @@ def start_provisioning():
     thread.start()
 
     return jsonify({"success": True, "message": "Installation gestartet"})
+
+
+@app.route("/api/provision/download-log")
+def download_provision_log():
+    """Download the local log created during provisioning."""
+    if os.path.exists(LOCAL_LOG_FILE):
+        try:
+            with open(LOCAL_LOG_FILE, "rb") as f:
+                content = f.read()
+            return Response(
+                content,
+                mimetype="text/plain; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=dbskiosk-install.log"}
+            )
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    return "Noch kein Installationslog vorhanden.", 404
+
+
+@app.route("/api/pi/download-install-log")
+def download_pi_install_log():
+    """Download the actual installation log from the Raspberry Pi (/var/log/dbskiosk-install.log)."""
+    settings = load_settings()
+    host = settings.get("host")
+    port = int(settings.get("port", 22))
+    username = settings.get("username", "pi")
+    password = settings.get("password", "")
+    api_port = int(settings.get("api_port", 8088))
+
+    if not host:
+        return jsonify({"error": "Keine IP-Adresse konfiguriert"}), 400
+
+    # 1. Versuch: Über REST-API (Port 8088)
+    try:
+        url = f"http://{host}:{api_port}/api/logs/install"
+        resp = requests.get(url, auth=(username, password), timeout=4)
+        if resp.status_code == 200 and resp.content:
+            return Response(
+                resp.content,
+                mimetype="text/plain; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=dbskiosk-install.log"}
+            )
+    except Exception:
+        pass
+
+    # 2. Versuch: Über SSH/SFTP direkt von /var/log/dbskiosk-install.log
+    if password:
+        try:
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(hostname=host, port=port, username=username, password=password, timeout=6)
+            sftp = client.open_sftp()
+            with sftp.open("/var/log/dbskiosk-install.log", "r") as f:
+                content = f.read()
+            sftp.close()
+            client.close()
+            return Response(
+                content,
+                mimetype="text/plain; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=dbskiosk-install.log"}
+            )
+        except Exception:
+            pass
+
+    # 3. Fallback auf das lokale Provisioning-Log, falls vorhanden
+    if os.path.exists(LOCAL_LOG_FILE):
+        try:
+            with open(LOCAL_LOG_FILE, "rb") as f:
+                content = f.read()
+            return Response(
+                content,
+                mimetype="text/plain; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=dbskiosk-install.log"}
+            )
+        except Exception:
+            pass
+
+    return jsonify({"error": "Installationslog konnte weder vom Raspberry Pi noch lokal gefunden werden"}), 404
+
+
+@app.route("/api/pi/download-config-log")
+def download_pi_config_log():
+    """Download the configuration change log from the Raspberry Pi (/var/log/dbskiosk-config.log)."""
+    settings = load_settings()
+    host = settings.get("host")
+    port = int(settings.get("port", 22))
+    username = settings.get("username", "pi")
+    password = settings.get("password", "")
+    api_port = int(settings.get("api_port", 8088))
+
+    if not host:
+        return jsonify({"error": "Keine IP-Adresse konfiguriert"}), 400
+
+    try:
+        url = f"http://{host}:{api_port}/api/logs/config"
+        resp = requests.get(url, auth=(username, password), timeout=4)
+        if resp.status_code == 200 and resp.content:
+            return Response(
+                resp.content,
+                mimetype="text/plain; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=dbskiosk-config.log"}
+            )
+    except Exception:
+        pass
+
+    if password:
+        try:
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(hostname=host, port=port, username=username, password=password, timeout=6)
+            sftp = client.open_sftp()
+            with sftp.open("/var/log/dbskiosk-config.log", "r") as f:
+                content = f.read()
+            sftp.close()
+            client.close()
+            return Response(
+                content,
+                mimetype="text/plain; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=dbskiosk-config.log"}
+            )
+        except Exception as e:
+            return jsonify({"error": f"Konfigurationslog nicht verfügbar: {e}"}), 404
+
+    return jsonify({"error": "Konfigurationslog nicht verfügbar"}), 404
 
 
 @app.route("/api/provision/stream")

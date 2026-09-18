@@ -26,6 +26,18 @@ SCHEDULE_FILE = "/etc/dbskiosk/bell_schedule.json"
 CYCLER_HTML = "/var/lib/dbskiosk/kiosk-cycler.html"
 SOUNDS_DIR = "/var/lib/dbskiosk/sounds"
 BELL_PATH = os.path.join(SOUNDS_DIR, "bell.mp3")
+INSTALL_LOG_FILE = "/var/log/dbskiosk-install.log"
+CONFIG_LOG_FILE = "/var/log/dbskiosk-config.log"
+
+
+def log_config_event(action):
+    """Appends an entry to the configuration log with timestamp."""
+    try:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(CONFIG_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {action}\n")
+    except Exception:
+        pass
 
 
 def read_config():
@@ -71,6 +83,7 @@ def save_config_value(key, value):
 
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
+    log_config_event(f"Einstellung geändert: {key} = {value}")
 
 
 def authenticate(username, password):
@@ -210,6 +223,42 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
 
         if not self._require_auth():
             return
+
+        if path == "/api/logs/install":
+            if os.path.exists(INSTALL_LOG_FILE):
+                try:
+                    with open(INSTALL_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Disposition", 'attachment; filename="dbskiosk-install.log"')
+                    self.end_headers()
+                    self.wfile.write(data.encode("utf-8"))
+                    return
+                except Exception as e:
+                    self._send_json({"error": str(e)}, status=500)
+                    return
+            else:
+                self._send_json({"error": "Installationslog /var/log/dbskiosk-install.log nicht vorhanden"}, status=404)
+                return
+
+        if path == "/api/logs/config":
+            if os.path.exists(CONFIG_LOG_FILE):
+                try:
+                    with open(CONFIG_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Disposition", 'attachment; filename="dbskiosk-config.log"')
+                    self.end_headers()
+                    self.wfile.write(data.encode("utf-8"))
+                    return
+                except Exception as e:
+                    self._send_json({"error": str(e)}, status=500)
+                    return
+            else:
+                self._send_json({"error": "Konfigurationslog /var/log/dbskiosk-config.log nicht vorhanden"}, status=404)
+                return
 
         if path == "/api/bell/schedule":
             if os.path.exists(SCHEDULE_FILE):

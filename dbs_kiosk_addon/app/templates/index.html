@@ -69,7 +69,12 @@
       </div>
 
       <div class="card" id="terminal-card" style="display: none;">
-        <h2 class="card-title">📜 Installationsprotokoll (Echtzeit-Ausgabe)</h2>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+          <h2 class="card-title" style="margin-bottom: 0;">📜 Installationsprotokoll (Echtzeit-Ausgabe)</h2>
+          <a id="btn-download-log" href="{{ ingress_path }}/api/provision/download-log" download="dbskiosk-install.log" class="btn btn-secondary" style="font-size: 13px; text-decoration: none; padding: 6px 14px; display: inline-flex; align-items: center; gap: 6px;">
+            📥 Logdatei herunterladen
+          </a>
+        </div>
         <div class="terminal" id="terminal-output">Warte auf Start...</div>
       </div>
     </div>
@@ -202,6 +207,21 @@
           </div>
         </div>
         <button class="btn btn-secondary" style="margin-top: 16px;" onclick="fetchStatus()">🔄 Aktualisieren</button>
+      </div>
+
+      <div class="card" style="margin-top: 16px;">
+        <h2 class="card-title">📜 System- & Installationsprotokolle</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">
+          Lade die Logdateien herunter, um im Detail zu analysieren, welche Installationsschritte erfolgreich waren und wo es eventuell Probleme gab.
+        </p>
+        <div class="btn-group">
+          <a href="{{ ingress_path }}/api/pi/download-install-log" download="dbskiosk-install.log" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+            📥 Installations-Log (/var/log/dbskiosk-install.log)
+          </a>
+          <a href="{{ ingress_path }}/api/pi/download-config-log" download="dbskiosk-config.log" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+            📥 Konfigurations-Log (/var/log/dbskiosk-config.log)
+          </a>
+        </div>
       </div>
     </div>
 

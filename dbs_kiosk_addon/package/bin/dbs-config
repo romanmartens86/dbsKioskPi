@@ -30,6 +30,13 @@ fi
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
 
+CONFIG_LOG="/var/log/dbskiosk-config.log"
+log_config() {
+    local ts
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$ts] [CLI] $*" >> "$CONFIG_LOG" 2>/dev/null || true
+}
+
 # Hilfsfunktion für Dialoggrößen
 WT_BACKTITLE="dbsKioskPi Konfigurationsassistent - https://github.com"
 
@@ -179,6 +186,7 @@ configure_url() {
         echo "KIOSK_URL=\"$new_url\"" >> "$CONFIG_FILE"
     fi
     KIOSK_URL="$new_url"
+    log_config "URL geändert zu: $new_url"
 
     if whiptail --backtitle "$WT_BACKTITLE" --yesno "URL wurde gespeichert!\n\nMöchtest du den Kiosk-Dienst jetzt neu starten, um die neue Seite direkt anzuzeigen?" 10 65; then
         systemctl restart kiosk.service 2>/dev/null || true

@@ -13,21 +13,37 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
+# Log-Datei Konfiguration
+LOG_FILE="/var/log/dbskiosk-install.log"
+mkdir -p /var/log
+touch "$LOG_FILE"
+chmod 644 "$LOG_FILE" 2>/dev/null || true
+
+# Leite alle Ausgaben (stdout & stderr) zeitgleich in die Konsole und in das Logfile
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+timestamp() {
+    date '+%Y-%m-%d %H:%M:%S'
+}
+
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "${BLUE}[$(timestamp)] [INFO]${NC} $1"
 }
 
 log_success() {
-    echo -e "${GREEN}[OK]${NC} $1"
+    echo -e "${GREEN}[$(timestamp)] [OK]${NC} $1"
 }
 
 log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+    echo -e "${YELLOW}[$(timestamp)] [WARN]${NC} $1"
 }
 
 log_error() {
-    echo -e "${RED}[FEHLER]${NC} $1" >&2
+    echo -e "${RED}[$(timestamp)] [FEHLER]${NC} $1" >&2
 }
+
+# Fange unerwartete Fehler automatisch mit Zeilennummer ab
+trap 'log_error "Installation bei Zeile $LINENO mit Exit-Code $? abgebrochen! Details siehe oben oder im Logfile: $LOG_FILE"' ERR
 
 # ------------------------------------------------------------------------------
 # 1. Root- und System-Prüfung
@@ -39,7 +55,7 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-log_info "Starte dbsKioskPi Installation..."
+log_info "Starte dbsKioskPi Installation (Logfile: $LOG_FILE)..."
 
 # Ermittle den Zielbenutzer (der Benutzer, der 'sudo' aufgerufen hat)
 TARGET_USER="${SUDO_USER:-}"

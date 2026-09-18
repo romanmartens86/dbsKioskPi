@@ -55,6 +55,7 @@ async function testSSH() {
     const data = await res.json();
     if (data.success) {
       showToast(data.message || 'Verbindung erfolgreich!');
+      setTimeout(fetchStatus, 600);
     } else {
       showToast(`Fehler: ${data.error}`, true);
     }

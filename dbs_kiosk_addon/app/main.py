@@ -126,6 +126,36 @@ def test_ssh():
 
     provisioner = SSHProvisioner(host=host, port=port, username=username, password=password)
     result = provisioner.test_connection()
+    if result.get("success"):
+        settings["host"] = host
+        settings["port"] = port
+        settings["username"] = username
+        if password and password != "••••••••":
+            settings["password"] = password
+        save_settings(settings)
+
+        # Falls dbs-api auf dem Pi existiert, stelle sicher, dass die neue Version aktiv ist und Auth passt
+        try:
+            client = provisioner.connect(timeout=6)
+            stdin, stdout, stderr = client.exec_command("[ -f /usr/local/bin/dbs-api ] && echo 'exists'")
+            if stdout.read().decode().strip() == "exists":
+                # api_auth.conf anlegen für zuverlässige HTTP Basic Auth
+                if password:
+                    client.exec_command(f"echo '{username}:{password}' | sudo tee /etc/dbskiosk/api_auth.conf >/dev/null && sudo chmod 600 /etc/dbskiosk/api_auth.conf")
+                
+                # Aktualisiertes dbs-api.py übertragen (ohne cgi Modul für Python 3.13)
+                pkg_api = os.path.join(os.path.dirname(__file__), "..", "package", "files", "dbs-api.py")
+                if not os.path.exists(pkg_api):
+                    pkg_api = "/app/package/files/dbs-api.py"
+                if os.path.exists(pkg_api):
+                    sftp = client.open_sftp()
+                    sftp.put(pkg_api, "/tmp/dbs-api.py")
+                    sftp.close()
+                    client.exec_command("sudo cp /tmp/dbs-api.py /usr/local/bin/dbs-api && sudo chmod 755 /usr/local/bin/dbs-api && sudo systemctl restart dbs-api.service")
+            client.close()
+        except Exception:
+            pass
+
     return jsonify(result)
 
 

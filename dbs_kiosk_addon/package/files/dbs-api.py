@@ -10,10 +10,11 @@ import os
 import json
 import base64
 import subprocess
-import cgi
 import shutil
 import threading
 import time
+import ctypes
+import ctypes.util
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -116,7 +117,19 @@ def authenticate(username, password):
                         if stored_hash in ("*", "!", ""):
                             return False
                         
-                        # Use openssl to verify standard Linux crypt hash
+                        # Native glibc libcrypt (supports yescrypt $y$, sha512 $6$, sha256 $5$)
+                        try:
+                            lib_name = ctypes.util.find_library("crypt") or "libcrypt.so.1"
+                            libcrypt = ctypes.cdll.LoadLibrary(lib_name)
+                            libcrypt.crypt.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+                            libcrypt.crypt.restype = ctypes.c_char_p
+                            res = libcrypt.crypt(password.encode("utf-8"), stored_hash.encode("utf-8"))
+                            if res and res.decode("utf-8") == stored_hash:
+                                return True
+                        except Exception:
+                            pass
+
+                        # Fallback using openssl passwd
                         if stored_hash.startswith("$"):
                             parts = stored_hash.split("$")
                             if len(parts) >= 4:
@@ -131,14 +144,6 @@ def authenticate(username, password):
                                         return True
                                 except Exception:
                                     pass
-
-                        # Fallback to python crypt if available
-                        try:
-                            import crypt
-                            if crypt.crypt(password, stored_hash) == stored_hash:
-                                return True
-                        except Exception:
-                            pass
         except Exception as e:
             print(f"[AUTH ERROR] Failed checking shadow: {e}", file=sys.stderr)
 

@@ -156,6 +156,10 @@ class SSHProvisioner:
                     log_callback("[OK] Starte den Raspberry Pi jetzt neu...")
                     log_callback("[OK] ========================================================")
 
+                # api_auth.conf anlegen für zuverlässige REST-API Authentifizierung
+                if self.password:
+                    self.client.exec_command(f"echo '{self.username}:{self.password}' | sudo tee /etc/dbskiosk/api_auth.conf >/dev/null && sudo chmod 600 /etc/dbskiosk/api_auth.conf")
+
                 # Reboot ausführen
                 try:
                     self.client.exec_command("sudo reboot")

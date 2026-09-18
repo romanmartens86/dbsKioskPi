@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>dbsKioskPi Manager</title>
+  <link rel="stylesheet" href="{{ ingress_path }}/static/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <span style="font-size: 28px;">🖥️</span>
+        <div>
+          <h1>dbsKioskPi Manager</h1>
+          <p style="font-size: 13px; color: var(--text-secondary);">Home Assistant Remote-Provisioning & Schulglocken-System</p>
+        </div>
+      </div>
+      <div>
+        <span id="pi-status-badge" class="badge offline">
+          <span style="width: 8px; height: 8px; border-radius: 50%; background: currentColor;"></span>
+          <span id="pi-status-text">Prüfe Status...</span>
+        </span>
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab-btn active" onclick="switchTab('setup')">🚀 Remote-Setup (SSH)</button>
+      <button class="tab-btn" onclick="switchTab('kiosk')">📺 Webseiten & Rotation</button>
+      <button class="tab-btn" onclick="switchTab('bell')">🔔 Schulglocken-Planer</button>
+      <button class="tab-btn" onclick="switchTab('cec')">⚡ HDMI TV-Steuerung</button>
+      <button class="tab-btn" onclick="switchTab('status')">📊 Live-Status</button>
+    </nav>
+
+    <!-- ----------------------------------------------------------------------- -->
+    <!-- TAB 1: Remote Setup (SSH Provisioning) -->
+    <!-- ----------------------------------------------------------------------- -->
+    <div id="tab-setup" class="tab-content active">
+      <div class="card">
+        <h2 class="card-title">🔌 1. Verbindung zum nackten Raspberry Pi</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">
+          Gib die IP-Adresse und Zugangsdaten deines frisch installierten Raspberry Pi OS Lite (64-Bit) an.
+          Das Add-on installiert alle Kiosk- und Audio-Komponenten vollautomatisch per SSH.
+        </p>
+
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="ssh-host">IP-Adresse / Hostname</label>
+            <input type="text" id="ssh-host" placeholder="z. B. 192.168.1.120" value="{{ settings.host }}">
+          </div>
+          <div class="form-group">
+            <label for="ssh-port">SSH-Port</label>
+            <input type="number" id="ssh-port" value="{{ settings.port or 22 }}">
+          </div>
+          <div class="form-group">
+            <label for="ssh-user">Benutzername</label>
+            <input type="text" id="ssh-user" placeholder="pi" value="{{ settings.username or 'pi' }}">
+          </div>
+          <div class="form-group">
+            <label for="ssh-pass">Passwort</label>
+            <input type="password" id="ssh-pass" placeholder="{{ '••••••••' if settings.has_password else 'Passwort eingeben' }}" value="{{ settings.password }}">
+          </div>
+        </div>
+
+        <div class="btn-group">
+          <button class="btn btn-secondary" onclick="testSSH()">🔍 Verbindung testen</button>
+          <button class="btn btn-success" onclick="startProvisioning()">🚀 KioskPi vollautomatisch installieren</button>
+        </div>
+      </div>
+
+      <div class="card" id="terminal-card" style="display: none;">
+        <h2 class="card-title">📜 Installationsprotokoll (Echtzeit-Ausgabe)</h2>
+        <div class="terminal" id="terminal-output">Warte auf Start...</div>
+      </div>
+    </div>
+
+    <!-- ----------------------------------------------------------------------- -->
+    <!-- TAB 2: Webseiten & Playlist (Rotation) -->
+    <!-- ----------------------------------------------------------------------- -->
+    <div id="tab-kiosk" class="tab-content">
+      <div class="card">
+        <h2 class="card-title">📺 Kiosk-Webseiten & Diashow-Rotation</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">
+          Lege fest, welche Webseiten auf dem Bildschirm angezeigt werden sollen. Wenn du mehrere Seiten einträgst,
+          wechselt der Kiosk automatisch nach der gewünschten Zeit zur nächsten Seite (nahtlos ohne Bildschirmflackern).
+        </p>
+
+        <div id="playlist-container"></div>
+
+        <div class="btn-group" style="margin-top: 16px;">
+          <button class="btn btn-secondary" onclick="addPlaylistItem()">➕ Seite hinzufügen</button>
+          <button class="btn" onclick="savePlaylist()">💾 Playlist auf Kiosk speichern</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ----------------------------------------------------------------------- -->
+    <!-- TAB 3: Schulglocken-Planer & MP3 -->
+    <!-- ----------------------------------------------------------------------- -->
+    <div id="tab-bell" class="tab-content">
+      <div class="card">
+        <h2 class="card-title">🎵 Schulglocken-Sound (MP3)</h2>
+        <div class="dropzone" id="bell-dropzone" onclick="document.getElementById('bell-file-input').click()">
+          <span style="font-size: 32px;">📁</span>
+          <p style="font-weight: 600; margin-top: 8px;">Klicke hier oder ziehe eine MP3-Datei hinein</p>
+          <p style="font-size: 12px; color: var(--text-secondary);">Unterstützt Standard MP3-Dateien (z. B. Schulgong, Pausensound, Melodie)</p>
+          <input type="file" id="bell-file-input" accept="audio/mpeg,audio/mp3" style="display: none;" onchange="uploadBellFile(this.files[0])">
+        </div>
+        <div style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
+          <span id="bell-file-status" style="font-size: 14px; color: var(--text-secondary);">Lade Status...</span>
+          <button class="btn btn-secondary" onclick="testPlayBell()">🔔 Test: Glocke jetzt abspielen</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">⏰ Stundenplaner (Automatische Gong-Zeiten)</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">
+          Konfiguriere, wann die Glocke an Schultagen automatisch ertönen soll. Der Raspberry Pi führt den Zeitplan
+          auch bei Netzwerkausfällen vollkommen autark und zuverlässig aus.
+        </p>
+
+        <div class="table-responsive">
+          <table>
+            <thead>
+              <tr>
+                <th>Uhrzeit</th>
+                <th>Bezeichnung (z. B. Stunde / Pause)</th>
+                <th>Wochentage</th>
+                <th>Lautstärke</th>
+                <th>Aktion</th>
+              </tr>
+            </thead>
+            <tbody id="schedule-tbody"></tbody>
+          </table>
+        </div>
+
+        <div class="btn-group" style="margin-top: 16px;">
+          <button class="btn btn-secondary" onclick="addScheduleRow()">➕ Zeit hinzufügen</button>
+          <button class="btn" onclick="saveBellSchedule()">💾 Glocken-Zeitplan speichern</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ----------------------------------------------------------------------- -->
+    <!-- TAB 4: HDMI-CEC TV Steuerung -->
+    <!-- ----------------------------------------------------------------------- -->
+    <div id="tab-cec" class="tab-content">
+      <div class="card">
+        <h2 class="card-title">⚡ HDMI-CEC Fernseher-Steuerung</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">
+          Schaltet den Fernseher morgens automatisch ein und abends in den energiesparenden Standby-Modus.
+        </p>
+
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="cec-on-time">Morgens einschalten um</label>
+            <input type="time" id="cec-on-time" value="07:00">
+          </div>
+          <div class="form-group">
+            <label for="cec-off-time">Abends ausschalten um</label>
+            <input type="time" id="cec-off-time" value="19:00">
+          </div>
+        </div>
+
+        <div class="btn-group" style="margin-bottom: 24px;">
+          <button class="btn" onclick="saveCecSchedule()">💾 Zeiten speichern</button>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid var(--border); margin-bottom: 20px;">
+
+        <h3 style="font-size: 15px; margin-bottom: 12px;">Live-Schaltung:</h3>
+        <div class="btn-group">
+          <button class="btn btn-success" onclick="toggleScreen('on')">📺 TV Jetzt Einschalten (on 0 + as)</button>
+          <button class="btn btn-danger" onclick="toggleScreen('off')">🌙 TV Jetzt in Standby (standby 0)</button>
+          <button class="btn btn-secondary" onclick="restartKioskService()">🔄 Kiosk-Browser neu starten</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ----------------------------------------------------------------------- -->
+    <!-- TAB 5: Live-Status -->
+    <!-- ----------------------------------------------------------------------- -->
+    <div id="tab-status" class="tab-content">
+      <div class="card">
+        <h2 class="card-title">📊 Raspberry Pi Systemstatus</h2>
+        <div class="form-grid">
+          <div>
+            <span style="font-size: 13px; color: var(--text-secondary);">Kiosk-Dienst</span>
+            <p id="stat-kiosk-service" style="font-size: 18px; font-weight: 600;">-</p>
+          </div>
+          <div>
+            <span style="font-size: 13px; color: var(--text-secondary);">HDMI Bildschirm</span>
+            <p id="stat-screen-power" style="font-size: 18px; font-weight: 600;">-</p>
+          </div>
+          <div>
+            <span style="font-size: 13px; color: var(--text-secondary);">Aktive URL</span>
+            <p id="stat-kiosk-url" style="font-size: 14px; font-weight: 500; word-break: break-all;">-</p>
+          </div>
+          <div>
+            <span style="font-size: 13px; color: var(--text-secondary);">Glockendatei</span>
+            <p id="stat-bell-info" style="font-size: 18px; font-weight: 600;">-</p>
+          </div>
+        </div>
+        <button class="btn btn-secondary" style="margin-top: 16px;" onclick="fetchStatus()">🔄 Aktualisieren</button>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="toast" class="notification">Hinweis</div>
+
+  <script>
+    window.INGRESS_PATH = "{{ ingress_path }}";
+  </script>
+  <script src="{{ ingress_path }}/static/js/app.js"></script>
+</body>
+</html>

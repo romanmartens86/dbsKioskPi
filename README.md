@@ -137,23 +137,51 @@ sudo systemctl restart kiosk.service
 
 ---
 
-## 🏠 Home Assistant Integration & Schulglocke 🔔
+## 🚀 Das Home Assistant Add-on: "dbsKioskPi Manager" 🛠️
 
-Das Repository beinhaltet eine fertige **Home Assistant Custom Integration** (`custom_components/dbs_kiosk`), die über das Home Assistant Webinterface eingerichtet werden kann:
+Neben der manuellen Installation bietet das Repository ein vollwertiges **Home Assistant Add-on** mit Weboberfläche (Ingress) in der Seitenleiste:
+
+### 🌟 Die Zero-Touch Remote-Einrichtung:
+1. **Raspberry Pi vorbereiten:**
+   Flashe ein nacktes **Raspberry Pi OS Lite (64-Bit)** mit dem Raspberry Pi Imager.
+   Aktiviere dort lediglich **SSH** (mit Benutzername/Passwort) und das Netzwerk (WLAN oder LAN).
+2. **Add-on in Home Assistant installieren:**
+   - Gehe zu: **Einstellungen -> Add-ons -> Add-on Store -> Repositories** (drei Punkte oben rechts).
+   - Füge die GitHub-URL dieses Repositories hinzu.
+   - Installiere das Add-on **dbsKioskPi Manager** und starte es.
+3. **Remote-Installation mit einem Klick ausführen:**
+   - Öffne das Add-on über die Seitenleiste von Home Assistant.
+   - Gib im Tab **"Remote-Setup"** die IP-Adresse, den Benutzer (`pi`) und das Passwort ein.
+   - Klicke auf **"KioskPi vollautomatisch installieren"**.
+   - Das Add-on verbindet sich per SSH, überträgt alle Dateien, installiert alle Komponenten und streamt die Terminal-Ausgabe live in dein Dashboard. Nach Abschluss startet der KioskPi neu – fertig!
+
+### 🎛️ Alle Kiosk-Einstellungen im Add-on Web-Dashboard:
+- **Webseiten & Playlist (Rotation):** Trage beliebig viele URLs ein (z. B. Vertretungsplan für 30s, Speiseplan für 15s, News für 10s). Der Kiosk wechselt die Seiten nahtlos ohne Flackern.
+- **Schulglocken-Planer:**
+  - Lade MP3-Dateien per Drag & Drop direkt im Browser hoch.
+  - Baue den Stundenplan für automatische Pausengongs (Uhrzeit, Mo–Fr, Lautstärke).
+  - Teste die Glocke mit dem Button **"Glocke jetzt läuten"**.
+- **HDMI-CEC TV-Steuerung:** Passe die morgendlichen Einschalt- und abendlichen Standby-Zeiten an oder schalte das Display per Knopfdruck an/aus.
+
+---
+
+## 🏠 Home Assistant Custom Integration & Entitäten 🔔
+
+Möchtest du Kiosk und Schulglocke lieber über native Home Assistant Entitäten und Automationen steuern?
+Das Repository beinhaltet zusätzlich die **Custom Integration** ([`homeassistant/custom_components/dbs_kiosk`](file:///c:/Users/romem/dev/dbsKioskPi/homeassistant/custom_components/dbs_kiosk)):
 
 1. **Ordner kopieren:**
-   Kopiere das Verzeichnis [`homeassistant/custom_components/dbs_kiosk`](file:///c:/Users/romem/dev/dbsKioskPi/homeassistant/custom_components/dbs_kiosk) auf deinen Home Assistant Server nach `/config/custom_components/dbs_kiosk`.
-2. **Home Assistant neustarten.**
-3. **Integration hinzufügen:**
-   - Gehe zu: **Einstellungen -> Geräte & Dienste -> Integration hinzufügen -> dbsKioskPi**.
-   - Gib die **IP-Adresse**, den **Benutzernamen** (z. B. `pi`) und das **Passwort** des KioskPi ein.
-4. **Schulglocke als MP3 zuweisen:**
-   - Nutze den Dienst `dbs_kiosk.upload_bell`, um eine MP3-Audiodatei aus Home Assistant direkt auf den Raspberry Pi zu übertragen.
-   - Erstelle in Home Assistant Automationen (z. B. für Pausenzeiten montags bis freitags um 08:00, 09:35, 11:30 Uhr), die den Dienst `dbs_kiosk.play_bell` aufrufen.
-5. **Fernseher steuern:**
-   - Schalte den Fernseher manuell über den Switch `switch.hdmi_tv_bildschirm` ein/aus oder passe die täglichen Einschalt- und Standby-Zeiten direkt über die Zeiteinheiten in Home Assistant an.
+   Kopiere `homeassistant/custom_components/dbs_kiosk` nach `/config/custom_components/dbs_kiosk`.
+2. **Integration hinzufügen:**
+   - Unter **Einstellungen -> Geräte & Dienste -> Integration hinzufügen -> dbsKioskPi**.
+   - Gib IP, Benutzer und Passwort ein.
+3. **Verfügbare Entitäten:**
+   - `switch.hdmi_tv_bildschirm`: Fernseher an/aus.
+   - `time.tv_einschaltzeit` & `time.tv_standby_zeit`: Zeiteinheiten.
+   - `button.schulglocke_lauten`: Gong manuell auslösen.
+   - Dienste: `dbs_kiosk.play_bell`, `dbs_kiosk.upload_bell`, `dbs_kiosk.set_screen_schedule`.
 
-Detaillierte Beispiele und YAML-Vorlagen findest du in der [Home Assistant Anleitung](file:///c:/Users/romem/dev/dbsKioskPi/homeassistant/README.md).
+Detaillierte Beispiele und Vorlagen findest du in der [Home Assistant Anleitung](file:///c:/Users/romem/dev/dbsKioskPi/homeassistant/README.md).
 
 ---
 
@@ -161,6 +189,17 @@ Detaillierte Beispiele und YAML-Vorlagen findest du in der [Home Assistant Anlei
 
 ```
 dbsKioskPi/
+├── repository.yaml                # Home Assistant Add-on Repository Metadaten
+├── dbs_kiosk_addon/               # Home Assistant Add-on (Web-UI & Remote-Provisioner)
+│   ├── config.yaml                # Add-on Konfiguration (Ingress: true)
+│   ├── Dockerfile                 # Container-Build (Python 3.11, OpenSSH, Paramiko)
+│   ├── run.sh                     # Startskript für Add-on
+│   └── app/                       # Web-Dashboard & SSH-Engine
+│       ├── main.py                # Flask Backend (SSE Log-Streaming)
+│       ├── provisioner.py         # Remote SSH Provisioning Engine
+│       ├── requirements.txt
+│       ├── templates/index.html   # Web-UI (Provisioner, Playlist, Glocke, TV)
+│       └── static/                # CSS & JavaScript
 ├── install.sh                     # Idempotentes Hauptinstallationsskript
 ├── bin/
 │   └── dbs-config                 # Interaktives CLI/TUI Konfigurationstool (Whiptail)
@@ -172,6 +211,7 @@ dbsKioskPi/
 │   ├── dbs-bell.sh                # Schulglocken-Audioskript (mpg123)
 │   ├── dbs-api.py                 # REST-API Daemon für Home Assistant (Port 8088)
 │   ├── dbs-api.service            # Systemd Service für REST-API Daemon
+│   ├── kiosk-cycler.html          # HTML5 Playlist-Rotator (nahtloser URL-Wechsel)
 │   ├── kiosk-cec-on.service       # Service zum Anschalten des TVs
 │   ├── kiosk-cec-on.timer         # Timer: Täglich um 07:00 Uhr
 │   ├── kiosk-cec-off.service      # Service für TV-Standby
@@ -180,17 +220,6 @@ dbsKioskPi/
 │   ├── README.md                  # Ausführliche Anleitung & Automationsvorlagen
 │   └── custom_components/
 │       └── dbs_kiosk/             # Das fertige Home Assistant Plugin
-│           ├── manifest.json
-│           ├── config_flow.py     # UI-Einrichtung mit IP, Benutzer & Passwort
-│           ├── __init__.py
-│           ├── const.py
-│           ├── coordinator.py
-│           ├── switch.py          # HDMI TV Switch (An/Aus)
-│           ├── button.py          # Schulglocke läuten & Kiosk Neustart
-│           ├── time.py            # TV Ein- & Ausschaltzeiten
-│           ├── sensor.py          # Kiosk Status- und URL-Sensoren
-│           ├── services.yaml      # MP3-Upload, Läuten & Zeitplan Services
-│           └── translations/      # Lokalisierung (Deutsch & Englisch)
 ├── .gitattributes                 # Plattformübergreifende LF-Normalisierung
 ├── .gitignore                     # Ausschluss temporärer Dateien & Caches
 └── README.md                      # Projektdokumentation

@@ -12,12 +12,18 @@ import base64
 import subprocess
 import cgi
 import shutil
+import threading
+import time
+from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 PORT = 8088
 CONFIG_FILE = "/etc/dbskiosk/kiosk.conf"
 AUTH_FILE = "/etc/dbskiosk/api_auth.conf"
+PLAYLIST_FILE = "/etc/dbskiosk/playlist.json"
+SCHEDULE_FILE = "/etc/dbskiosk/bell_schedule.json"
+CYCLER_HTML = "/var/lib/dbskiosk/kiosk-cycler.html"
 SOUNDS_DIR = "/var/lib/dbskiosk/sounds"
 BELL_PATH = os.path.join(SOUNDS_DIR, "bell.mp3")
 
@@ -175,7 +181,45 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             self._send_json({"status": "ok", "service": "dbsKioskPi"})
             return
 
+        if path == "/cycler":
+            # Serve kiosk cycler HTML page (public for localhost browser)
+            content = ""
+            if os.path.exists(CYCLER_HTML):
+                with open(CYCLER_HTML, "r", encoding="utf-8") as f:
+                    content = f.read()
+            else:
+                content = "<h1>Cycler file not found</h1>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(content.encode("utf-8"))
+            return
+
+        if path == "/api/kiosk/playlist":
+            # Return playlist
+            if os.path.exists(PLAYLIST_FILE):
+                try:
+                    with open(PLAYLIST_FILE, "r", encoding="utf-8") as f:
+                        self._send_json(json.load(f))
+                        return
+                except Exception:
+                    pass
+            cfg = read_config()
+            self._send_json([{"url": cfg.get("KIOSK_URL", ""), "duration": 30}])
+            return
+
         if not self._require_auth():
+            return
+
+        if path == "/api/bell/schedule":
+            if os.path.exists(SCHEDULE_FILE):
+                try:
+                    with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
+                        self._send_json(json.load(f))
+                        return
+                except Exception:
+                    pass
+            self._send_json([])
             return
 
         if path == "/api/status":
@@ -376,6 +420,48 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Missing 'url' parameter"}, 400)
             return
 
+        # ----------------------------------------------------------------------
+        # Playlist Management (Multi-URL Cycler)
+        # ----------------------------------------------------------------------
+        elif path == "/api/kiosk/playlist":
+            body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "[]"
+            try:
+                items = json.loads(body)
+                if not isinstance(items, list):
+                    self._send_json({"error": "Playlist must be a JSON array"}, 400)
+                    return
+                with open(PLAYLIST_FILE, "w", encoding="utf-8") as f:
+                    json.dump(items, f, indent=2)
+
+                # Falls mehr als 1 Seite: Auf Cycler umstellen
+                if len(items) > 1:
+                    save_config_value("KIOSK_URL", f"http://localhost:{PORT}/cycler")
+                elif len(items) == 1 and "url" in items[0]:
+                    save_config_value("KIOSK_URL", items[0]["url"])
+
+                subprocess.Popen(["systemctl", "restart", "kiosk.service"])
+                self._send_json({"success": True, "count": len(items)})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
+
+        # ----------------------------------------------------------------------
+        # Bell Schedule Management
+        # ----------------------------------------------------------------------
+        elif path == "/api/bell/schedule":
+            body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "[]"
+            try:
+                schedule = json.loads(body)
+                if not isinstance(schedule, list):
+                    self._send_json({"error": "Schedule must be an array"}, 400)
+                    return
+                with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(schedule, f, indent=2)
+                self._send_json({"success": True, "count": len(schedule)})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
+
         elif path == "/api/kiosk/restart":
             subprocess.Popen(["systemctl", "restart", "kiosk.service"])
             self._send_json({"success": True, "message": "Kiosk service restarting"})
@@ -384,8 +470,48 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "Not Found"}, 404)
 
 
+def bell_scheduler_loop():
+    """Background thread checking bell_schedule.json every 15 seconds."""
+    last_triggered_minute = ""
+    day_map = {0: "mon", 1: "tue", 2: "wed", 3: "thu", 4: "fri", 5: "sat", 6: "sun"}
+
+    while True:
+        try:
+            now = datetime.now()
+            current_hh_mm = now.strftime("%H:%M")
+            current_day = day_map.get(now.weekday(), "")
+
+            # Check once per minute
+            minute_key = f"{current_day}_{current_hh_mm}"
+            if minute_key != last_triggered_minute:
+                if os.path.exists(SCHEDULE_FILE):
+                    with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
+                        schedule = json.load(f)
+
+                    for entry in schedule:
+                        t = entry.get("time")
+                        days = entry.get("days", ["mon", "tue", "wed", "thu", "fri"])
+                        # Match current time and weekday
+                        if t == current_hh_mm and current_day in [d.lower() for d in days]:
+                            volume = entry.get("volume", 100)
+                            print(f"[SCHEDULER] Triggering scheduled bell: {entry.get('name', 'Gong')} at {current_hh_mm}")
+                            subprocess.Popen(["/usr/local/bin/dbs-bell", "play", str(volume)])
+                            last_triggered_minute = minute_key
+                            break
+        except Exception as e:
+            print(f"[WARN] Error in bell scheduler: {e}", file=sys.stderr)
+
+        time.sleep(15)
+
+
 def run_server():
     os.makedirs(SOUNDS_DIR, exist_ok=True)
+    os.makedirs("/var/lib/dbskiosk", exist_ok=True)
+
+    # Start background scheduler thread
+    scheduler_thread = threading.Thread(target=bell_scheduler_loop, daemon=True)
+    scheduler_thread.start()
+
     server_address = ("", PORT)
     httpd = HTTPServer(server_address, KioskAPIHandler)
     print(f"[INFO] dbsKioskPi REST API running on port {PORT}...")

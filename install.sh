@@ -169,7 +169,11 @@ if [ ! -f "/etc/dbskiosk/kiosk.conf" ]; then
 else
     log_info "Bestehende /etc/dbskiosk/kiosk.conf beibehalten (kein Überschreiben)."
 fi
-chmod 644 /etc/dbskiosk/kiosk.conf
+# Cycler HTML für Playlist-Rotation installieren
+if [ -f "$SCRIPT_DIR/files/kiosk-cycler.html" ]; then
+    cp "$SCRIPT_DIR/files/kiosk-cycler.html" /var/lib/dbskiosk/kiosk-cycler.html
+    chmod 644 /var/lib/dbskiosk/kiosk-cycler.html
+fi
 
 # Startskript installieren
 log_info "Installiere Kiosk-Startskript (/usr/local/bin/dbs-kiosk)..."

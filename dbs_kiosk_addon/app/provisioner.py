@@ -101,7 +101,7 @@ class SSHProvisioner:
             if log_callback:
                 log_callback("[WARN] Lokales Paketverzeichnis nicht gefunden, versuche Git-Clone auf Ziel...")
             stdin, stdout, stderr = self.client.exec_command(
-                f"git clone https://github.com/dbsKioskPi/dbsKioskPi.git {remote_dir}"
+                f"git clone https://github.com/romanmartens86/dbsKioskPi.git {remote_dir}"
             )
             stdout.channel.recv_exit_status()
 

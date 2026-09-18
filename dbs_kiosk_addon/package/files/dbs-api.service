@@ -1,0 +1,16 @@
+[Unit]
+Description=dbsKioskPi REST API Daemon for Home Assistant Integration
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/bin/dbs-api
+Restart=always
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

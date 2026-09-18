@@ -22,11 +22,8 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # Copy application files
 COPY app /app/
 
-# Copy repository files to provisioner package directory
-RUN mkdir -p /app/package
-COPY install.sh /app/package/
-COPY files /app/package/files/
-COPY bin /app/package/bin/
+# Copy provisioner package directory
+COPY package /app/package/
 
 COPY run.sh /run.sh
 RUN chmod +x /run.sh /app/main.py

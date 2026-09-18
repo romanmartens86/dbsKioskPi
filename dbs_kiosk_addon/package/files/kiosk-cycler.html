@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>dbsKioskPi Playlist Cycler</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background-color: #000;
+    }
+    .kiosk-frame {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border: none;
+      opacity: 0;
+      transition: opacity 0.8s ease-in-out;
+      pointer-events: auto;
+    }
+    .kiosk-frame.active {
+      opacity: 1;
+      z-index: 2;
+    }
+    .kiosk-frame.preload {
+      opacity: 0;
+      z-index: 1;
+    }
+    #progress-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      height: 4px;
+      background: linear-gradient(90deg, #3b82f6, #60a5fa);
+      z-index: 10;
+      width: 0%;
+      transition: width 0.2s linear;
+    }
+    #error-banner {
+      display: none;
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      background: rgba(220, 38, 38, 0.9);
+      color: #fff;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-family: sans-serif;
+      font-size: 13px;
+      z-index: 20;
+    }
+  </style>
+</head>
+<body>
+  <div id="progress-bar"></div>
+  <div id="error-banner">Playlist wird geladen...</div>
+
+  <iframe id="frameA" class="kiosk-frame active" src="about:blank"></iframe>
+  <iframe id="frameB" class="kiosk-frame" src="about:blank"></iframe>
+
+  <script>
+    let playlist = [];
+    let currentIndex = 0;
+    let activeFrame = 'A';
+    let timer = null;
+    let progressInterval = null;
+
+    async function loadPlaylist() {
+      try {
+        const res = await fetch('/api/kiosk/playlist');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            playlist = data;
+          }
+        }
+      } catch (e) {
+        console.warn("Konnte Playlist nicht über API laden, nutze Fallback.", e);
+      }
+
+      // Fallback falls keine Playlist gefunden wurde
+      if (!playlist || playlist.length === 0) {
+        playlist = [
+          { url: "https://dbs.edupage.org/infoscreen/7?scaletowidth=1920", duration: 30 }
+        ];
+      }
+
+      startCycle();
+    }
+
+    function startCycle() {
+      if (playlist.length === 0) return;
+      showItem(currentIndex);
+    }
+
+    function showItem(index) {
+      const item = playlist[index];
+      const durationMs = (item.duration || 30) * 1000;
+
+      const current = document.getElementById(activeFrame === 'A' ? 'frameA' : 'frameB');
+      const next = document.getElementById(activeFrame === 'A' ? 'frameB' : 'frameA');
+
+      // Setze neue Seite
+      next.src = item.url;
+
+      next.onload = () => {
+        next.className = 'kiosk-frame active';
+        current.className = 'kiosk-frame preload';
+        activeFrame = activeFrame === 'A' ? 'B' : 'A';
+      };
+
+      // Progress bar Animation
+      const bar = document.getElementById('progress-bar');
+      bar.style.transition = 'none';
+      bar.style.width = '0%';
+      let elapsed = 0;
+      clearInterval(progressInterval);
+      progressInterval = setInterval(() => {
+        elapsed += 100;
+        const pct = Math.min(100, (elapsed / durationMs) * 100);
+        bar.style.transition = 'width 0.1s linear';
+        bar.style.width = pct + '%';
+        if (elapsed >= durationMs) {
+          clearInterval(progressInterval);
+        }
+      }, 100);
+
+      // Timeout für nächsten Wechsel
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        currentIndex = (currentIndex + 1) % playlist.length;
+        // Aktualisiere Playlist alle 5 Durchläufe
+        if (currentIndex === 0) {
+          fetch('/api/kiosk/playlist')
+            .then(r => r.json())
+            .then(d => { if (Array.isArray(d) && d.length > 0) playlist = d; })
+            .catch(() => {});
+        }
+        showItem(currentIndex);
+      }, durationMs);
+    }
+
+    window.addEventListener('DOMContentLoaded', loadPlaylist);
+  </script>
+</body>
+</html>

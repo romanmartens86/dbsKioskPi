@@ -56,7 +56,7 @@ ssh pi@<raspberry-pi-ip>
 Führe die folgenden Befehle aus:
 
 ```bash
-git clone https://github.com/<DEIN-BENUTZER>/dbsKioskPi.git
+git clone https://github.com/romanmartens86/dbsKioskPi.git
 cd dbsKioskPi
 sudo bash install.sh
 ```

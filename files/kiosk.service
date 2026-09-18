@@ -1,0 +1,28 @@
+[Unit]
+Description=dbsKioskPi Wayland Chromium Kiosk
+After=systemd-user-sessions.service getty@tty1.service seatd.service network-online.target
+Wants=seatd.service network-online.target
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+User=@KIOSK_USER@
+Group=@KIOSK_USER@
+PAMName=login
+Environment=XDG_SESSION_TYPE=wayland
+Environment=XDG_RUNTIME_DIR=/run/user/@KIOSK_UID@
+Environment=WLR_SCENE_DISABLE_DIRECT_SCANOUT=1
+WorkingDirectory=/home/@KIOSK_USER@
+ExecStart=/usr/local/bin/dbs-kiosk
+Restart=always
+RestartSec=5s
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+
+[Install]
+WantedBy=graphical.target

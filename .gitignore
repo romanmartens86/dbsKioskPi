@@ -1,0 +1,15 @@
+# System & Editor files
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+
+# Logs and runtime caches
+*.log
+/tmp/
+/scratch/
+
+# Local custom config overrides (if any)
+*.local
+kiosk.conf.bak

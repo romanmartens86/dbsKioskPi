@@ -1,0 +1,408 @@
+#!/bin/bash
+# ==============================================================================
+# dbsKioskPi - Interaktives TUI/CLI Konfigurationstool (SSH & lokal)
+# Aufruf: sudo dbs-config
+# ==============================================================================
+
+set -u
+
+# Sicherstellen, dass Skript als Root läuft
+if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    echo "Das Konfigurationstool benötigt Administratorrechte."
+    echo "Starte mit sudo neu..."
+    exec sudo "$0" "$@"
+fi
+
+CONFIG_FILE="/etc/dbskiosk/kiosk.conf"
+mkdir -p /etc/dbskiosk
+
+# Falls Konfigurationsdatei fehlt, erstelle Standard
+if [ ! -f "$CONFIG_FILE" ]; then
+    cat << 'EOF' > "$CONFIG_FILE"
+KIOSK_URL="https://dbs.edupage.org/infoscreen/7?scaletowidth=1920"
+CEC_ENABLED="true"
+CEC_ON_TIME="07:00"
+CEC_OFF_TIME="19:00"
+EXTRA_CHROMIUM_FLAGS=""
+EOF
+fi
+
+# shellcheck disable=SC1090
+source "$CONFIG_FILE"
+
+# Hilfsfunktion für Dialoggrößen
+WT_BACKTITLE="dbsKioskPi Konfigurationsassistent - https://github.com"
+
+msg_box() {
+    whiptail --backtitle "$WT_BACKTITLE" --title "$1" --msgbox "$2" 12 70
+}
+
+# ------------------------------------------------------------------------------
+# 1. WLAN Konfiguration (NetworkManager / nmcli)
+# ------------------------------------------------------------------------------
+configure_wifi() {
+    if ! command -v nmcli >/dev/null 2>&1; then
+        msg_box "WLAN Fehler" "Das Tool 'nmcli' (NetworkManager) ist nicht installiert.\nBitte installiere network-manager via 'apt install network-manager'."
+        return
+    fi
+
+    # WLAN-Interface prüfen
+    local wifi_radio
+    wifi_radio=$(nmcli radio wifi 2>/dev/null || echo "unknown")
+    if [ "$wifi_radio" != "enabled" ]; then
+        nmcli radio wifi on 2>/dev/null || true
+    fi
+
+    whiptail --backtitle "$WT_BACKTITLE" --infobox "Scanne nach verfügbaren WLAN-Netzwerken... Bitte warten." 7 60
+    nmcli dev wifi rescan 2>/dev/null || true
+    sleep 2
+
+    # Liste der SSIDs auslesen (Eindeutige SSIDs filtern)
+    local raw_list
+    raw_list=$(nmcli -t -f SSID,SIGNAL,SECURITY dev wifi list | grep -v '^:' | grep -v '^--' | sort -u -t: -k1,1)
+
+    if [ -z "$raw_list" ]; then
+        if whiptail --backtitle "$WT_BACKTITLE" --yesno "Keine sichtbaren WLANs gefunden. Möchtest du eine versteckte SSID manuell eingeben?" 10 65; then
+            manual_wifi_entry
+        fi
+        return
+    fi
+
+    # Menu-Array für Whiptail vorbereiten
+    local menu_items=()
+    while IFS=: read -r ssid signal security; do
+        if [ -n "$ssid" ]; then
+            menu_items+=("$ssid" "Signal: ${signal}% [${security:-Offen}]")
+        fi
+    done <<< "$raw_list"
+    menu_items+=("MANUELL" "Manuelle Eingabe einer versteckten SSID")
+
+    local chosen_ssid
+    chosen_ssid=$(whiptail --backtitle "$WT_BACKTITLE" \
+        --title "WLAN-Netzwerk auswählen" \
+        --menu "Wähle dein WLAN-Netzwerk aus:" 18 70 10 \
+        "${menu_items[@]}" 3>&1 1>&2 2>&3)
+
+    if [ $? -ne 0 ] || [ -z "$chosen_ssid" ]; then
+        return
+    fi
+
+    if [ "$chosen_ssid" = "MANUELL" ]; then
+        manual_wifi_entry
+        return
+    fi
+
+    # Passwort abfragen
+    local wifi_pass
+    wifi_pass=$(whiptail --backtitle "$WT_BACKTITLE" \
+        --title "WLAN-Passwort für '$chosen_ssid'" \
+        --passwordbox "Gib das WLAN-Passwort ein (leer lassen für offene Netzwerke):" 10 65 \
+        3>&1 1>&2 2>&3)
+
+    if [ $? -ne 0 ]; then
+        return
+    fi
+
+    whiptail --backtitle "$WT_BACKTITLE" --infobox "Verbinde mit '$chosen_ssid'... Bitte warten." 7 60
+
+    local connect_output
+    if [ -z "$wifi_pass" ]; then
+        connect_output=$(nmcli dev wifi connect "$chosen_ssid" 2>&1)
+    else
+        connect_output=$(nmcli dev wifi connect "$chosen_ssid" password "$wifi_pass" 2>&1)
+    fi
+
+    if [ $? -eq 0 ]; then
+        local current_ip
+        current_ip=$(hostname -I | awk '{print $1}')
+        msg_box "WLAN Erfolgreich Verbunden!" "Erfolgreich mit '$chosen_ssid' verbunden!\n\nZugewiesene IP-Adresse: ${current_ip:-noch wird bezogen...}"
+    else
+        msg_box "Verbindungsfehler" "Konnte nicht mit '$chosen_ssid' verbinden:\n\n$connect_output"
+    fi
+}
+
+manual_wifi_entry() {
+    local manual_ssid
+    manual_ssid=$(whiptail --backtitle "$WT_BACKTITLE" \
+        --title "Manuelle SSID" \
+        --inputbox "Gib den genauen Netzwerknamen (SSID) ein:" 10 65 \
+        3>&1 1>&2 2>&3)
+
+    if [ $? -ne 0 ] || [ -z "$manual_ssid" ]; then
+        return
+    fi
+
+    local wifi_pass
+    wifi_pass=$(whiptail --backtitle "$WT_BACKTITLE" \
+        --title "Passwort für '$manual_ssid'" \
+        --passwordbox "Gib das WLAN-Passwort ein:" 10 65 \
+        3>&1 1>&2 2>&3)
+
+    if [ $? -ne 0 ]; then
+        return
+    fi
+
+    whiptail --backtitle "$WT_BACKTITLE" --infobox "Verbinde mit '$manual_ssid'... Bitte warten." 7 60
+    local connect_output
+    if [ -z "$wifi_pass" ]; then
+        connect_output=$(nmcli dev wifi connect "$manual_ssid" 2>&1)
+    else
+        connect_output=$(nmcli dev wifi connect "$manual_ssid" password "$wifi_pass" 2>&1)
+    fi
+
+    if [ $? -eq 0 ]; then
+        msg_box "WLAN Verbunden" "Erfolgreich mit '$manual_ssid' verbunden!\nIP: $(hostname -I | awk '{print $1}')"
+    else
+        msg_box "Verbindungsfehler" "Verbindung fehlgeschlagen:\n$connect_output"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 2. Kiosk Ziel-URL ändern
+# ------------------------------------------------------------------------------
+configure_url() {
+    local cur_url="${KIOSK_URL:-https://dbs.edupage.org/infoscreen/7?scaletowidth=1920}"
+    local new_url
+    new_url=$(whiptail --backtitle "$WT_BACKTITLE" \
+        --title "Kiosk-URL Konfiguration" \
+        --inputbox "Gib die Ziel-URL ein, die im Kiosk angezeigt werden soll:" 12 75 \
+        "$cur_url" 3>&1 1>&2 2>&3)
+
+    if [ $? -ne 0 ] || [ -z "$new_url" ]; then
+        return
+    fi
+
+    # In Config schreiben
+    if grep -q '^KIOSK_URL=' "$CONFIG_FILE"; then
+        sed -i "s|^KIOSK_URL=.*|KIOSK_URL=\"$new_url\"|" "$CONFIG_FILE"
+    else
+        echo "KIOSK_URL=\"$new_url\"" >> "$CONFIG_FILE"
+    fi
+    KIOSK_URL="$new_url"
+
+    if whiptail --backtitle "$WT_BACKTITLE" --yesno "URL wurde gespeichert!\n\nMöchtest du den Kiosk-Dienst jetzt neu starten, um die neue Seite direkt anzuzeigen?" 10 65; then
+        systemctl restart kiosk.service 2>/dev/null || true
+        msg_box "Neugestartet" "Kiosk-Dienst wurde mit der neuen URL neu gestartet."
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 3. HDMI-CEC Steuerung & Zeiten
+# ------------------------------------------------------------------------------
+configure_cec() {
+    while true; do
+        # shellcheck disable=SC1090
+        source "$CONFIG_FILE"
+        local status_text="Aktiv"
+        if [ "${CEC_ENABLED:-true}" != "true" ]; then
+            status_text="Deaktiviert"
+        fi
+
+        local choice
+        choice=$(whiptail --backtitle "$WT_BACKTITLE" \
+            --title "HDMI-CEC TV-Steuerung" \
+            --menu "Aktueller CEC-Status: $status_text\nEinschaltzeit: ${CEC_ON_TIME:-07:00} | Standby-Zeit: ${CEC_OFF_TIME:-19:00}\n\nWähle eine Aktion:" 18 70 7 \
+            "1" "CEC Ein/Ausschalten (Toggle)" \
+            "2" "Einschaltzeit ändern (${CEC_ON_TIME:-07:00})" \
+            "3" "Ausschaltzeit ändern (${CEC_OFF_TIME:-19:00})" \
+            "4" "TEST: TV JETZT einschalten (on 0 + as)" \
+            "5" "TEST: TV JETZT in Standby versetzen (standby 0)" \
+            "6" "TV Stromstatus abfragen (Power Status)" \
+            "7" "Zurück zum Hauptmenü" 3>&1 1>&2 2>&3)
+
+        if [ $? -ne 0 ] || [ "$choice" = "7" ]; then
+            break
+        fi
+
+        case "$choice" in
+            1)
+                if [ "${CEC_ENABLED:-true}" = "true" ]; then
+                    sed -i "s|^CEC_ENABLED=.*|CEC_ENABLED=\"false\"|" "$CONFIG_FILE"
+                    systemctl stop kiosk-cec-on.timer kiosk-cec-off.timer 2>/dev/null || true
+                    systemctl disable kiosk-cec-on.timer kiosk-cec-off.timer 2>/dev/null || true
+                    msg_box "CEC Deaktiviert" "HDMI-CEC und die automatischen Timer wurden deaktiviert."
+                else
+                    sed -i "s|^CEC_ENABLED=.*|CEC_ENABLED=\"true\"|" "$CONFIG_FILE"
+                    systemctl enable --now kiosk-cec-on.timer kiosk-cec-off.timer 2>/dev/null || true
+                    msg_box "CEC Aktiviert" "HDMI-CEC und die automatischen Timer wurden aktiviert."
+                fi
+                ;;
+            2)
+                local new_on
+                new_on=$(whiptail --backtitle "$WT_BACKTITLE" --title "Einschaltzeit ändern" \
+                    --inputbox "Gib die tägliche Einschaltzeit ein (Format HH:MM):" 10 60 "${CEC_ON_TIME:-07:00}" 3>&1 1>&2 2>&3)
+                if [ -n "$new_on" ]; then
+                    sed -i "s|^CEC_ON_TIME=.*|CEC_ON_TIME=\"$new_on\"|" "$CONFIG_FILE"
+                    # Aktualisiere Systemd-Timer
+                    mkdir -p /etc/systemd/system/kiosk-cec-on.timer.d
+                    cat << EOF > /etc/systemd/system/kiosk-cec-on.timer.d/override.conf
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* $new_on:00
+EOF
+                    systemctl daemon-reload
+                    systemctl restart kiosk-cec-on.timer 2>/dev/null || true
+                    msg_box "Gespeichert" "TV-Einschaltzeit auf $new_on Uhr aktualisiert."
+                fi
+                ;;
+            3)
+                local new_off
+                new_off=$(whiptail --backtitle "$WT_BACKTITLE" --title "Ausschaltzeit ändern" \
+                    --inputbox "Gib die tägliche Ausschaltzeit (Standby) ein (Format HH:MM):" 10 60 "${CEC_OFF_TIME:-19:00}" 3>&1 1>&2 2>&3)
+                if [ -n "$new_off" ]; then
+                    sed -i "s|^CEC_OFF_TIME=.*|CEC_OFF_TIME=\"$new_off\"|" "$CONFIG_FILE"
+                    # Aktualisiere Systemd-Timer
+                    mkdir -p /etc/systemd/system/kiosk-cec-off.timer.d
+                    cat << EOF > /etc/systemd/system/kiosk-cec-off.timer.d/override.conf
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* $new_off:00
+EOF
+                    systemctl daemon-reload
+                    systemctl restart kiosk-cec-off.timer 2>/dev/null || true
+                    msg_box "Gespeichert" "TV-Ausschaltzeit auf $new_off Uhr aktualisiert."
+                fi
+                ;;
+            4)
+                whiptail --backtitle "$WT_BACKTITLE" --infobox "Sende CEC 'on 0' und 'as' an TV..." 6 50
+                /usr/local/bin/dbs-cec force-on
+                msg_box "CEC Gesendet" "Befehl zum Einschalten wurde an HDMI-Port gesendet."
+                ;;
+            5)
+                whiptail --backtitle "$WT_BACKTITLE" --infobox "Sende CEC 'standby 0' an TV..." 6 50
+                /usr/local/bin/dbs-cec force-off
+                msg_box "CEC Gesendet" "Befehl für TV-Standby wurde an HDMI-Port gesendet."
+                ;;
+            6)
+                local cec_stat
+                cec_stat=$(/usr/local/bin/dbs-cec status 2>&1 || echo "Fehler bei CEC-Abfrage")
+                msg_box "CEC TV-Status" "$cec_stat"
+                ;;
+        esac
+    done
+}
+
+# ------------------------------------------------------------------------------
+# 4. Kiosk-Dienst verwalten
+# ------------------------------------------------------------------------------
+manage_kiosk_service() {
+    local svc_active
+    svc_active=$(systemctl is-active kiosk.service 2>/dev/null || echo "unbekannt")
+
+    local choice
+    choice=$(whiptail --backtitle "$WT_BACKTITLE" \
+        --title "Kiosk Dienststeuerung" \
+        --menu "Status des Kiosk-Dienstes: $svc_active\n\nWähle eine Aktion:" 16 65 5 \
+        "1" "Kiosk-Dienst neu starten (Restart)" \
+        "2" "Kiosk-Dienst stoppen" \
+        "3" "Kiosk-Dienst starten" \
+        "4" "Letzte 40 Zeilen Kiosk-Logs ansehen" \
+        "5" "Zurück" 3>&1 1>&2 2>&3)
+
+    case "$choice" in
+        1)
+            systemctl restart kiosk.service
+            msg_box "Dienst neu gestartet" "Der Kiosk-Dienst wurde neu gestartet."
+            ;;
+        2)
+            systemctl stop kiosk.service
+            msg_box "Dienst gestoppt" "Der Kiosk-Dienst wurde gestoppt."
+            ;;
+        3)
+            systemctl start kiosk.service
+            msg_box "Dienst gestartet" "Der Kiosk-Dienst wurde gestartet."
+            ;;
+        4)
+            local logs
+            logs=$(journalctl -u kiosk.service -n 40 --no-pager 2>&1)
+            whiptail --backtitle "$WT_BACKTITLE" --title "Kiosk Systemd Logs" --scrolltext --msgbox "$logs" 20 78
+            ;;
+    esac
+}
+
+# ------------------------------------------------------------------------------
+# 5. Systemstatus anzeigen
+# ------------------------------------------------------------------------------
+show_system_info() {
+    local host_name
+    host_name=$(hostname)
+    local ip_addrs
+    ip_addrs=$(hostname -I | xargs)
+    local uptime_str
+    uptime_str=$(uptime -p 2>/dev/null || uptime)
+    local mem_info
+    mem_info=$(free -h | awk '/^Mem:/ {print $3 "/" $2}')
+    local swap_info
+    swap_info=$(free -h | awk '/^Swap:/ {print $3 "/" $2}')
+    local temp_str="N/A"
+    if [ -f "/sys/class/thermal/thermal_zone0/temp" ]; then
+        local raw_temp
+        raw_temp=$(cat /sys/class/thermal/thermal_zone0/temp)
+        temp_str="$((raw_temp / 1000)) °C"
+    elif command -v vcgencmd >/dev/null 2>&1; then
+        temp_str=$(vcgencmd measure_temp 2>/dev/null | cut -d= -f2 || echo "N/A")
+    fi
+
+    local info_text="Hostname: $host_name\n"
+    info_text+="IP-Adressen: ${ip_addrs:-Keine Netzwerkverbindung}\n"
+    info_text+="Laufzeit: $uptime_str\n"
+    info_text+="RAM-Nutzung: $mem_info\n"
+    info_text+="Swap (zRAM): $swap_info\n"
+    info_text+="CPU-Temperatur: $temp_str\n\n"
+    info_text+="Aktuelle Kiosk-URL: ${KIOSK_URL:-Nicht definiert}\n"
+
+    msg_box "System- & Netzwerkstatus" "$info_text"
+}
+
+# ------------------------------------------------------------------------------
+# Hauptschleife
+# ------------------------------------------------------------------------------
+main_menu() {
+    while true; do
+        # shellcheck disable=SC1090
+        source "$CONFIG_FILE"
+
+        local current_ip
+        current_ip=$(hostname -I | awk '{print $1}')
+        local choice
+        choice=$(whiptail --backtitle "$WT_BACKTITLE" \
+            --title "dbsKioskPi Konfigurationsmenü" \
+            --menu "IP: ${current_ip:-Nicht verbunden} | Kiosk-Status: $(systemctl is-active kiosk.service 2>/dev/null || echo 'unbekannt')\n\nBitte Option wählen:" 18 70 7 \
+            "1" "WLAN einrichten (Scan & Verbinden)" \
+            "2" "Kiosk Ziel-URL ändern" \
+            "3" "HDMI-CEC TV-Steuerung & Zeitplan" \
+            "4" "Kiosk-Dienst verwalten (Logs, Restart)" \
+            "5" "System- & Netzwerkstatus anzeigen" \
+            "6" "Raspberry Pi NEUSTARTEN" \
+            "7" "Raspberry Pi HERUNTERFAHREN" \
+            "8" "Beenden" 3>&1 1>&2 2>&3)
+
+        if [ $? -ne 0 ] || [ "$choice" = "8" ]; then
+            break
+        fi
+
+        case "$choice" in
+            1) configure_wifi ;;
+            2) configure_url ;;
+            3) configure_cec ;;
+            4) manage_kiosk_service ;;
+            5) show_system_info ;;
+            6)
+                if whiptail --backtitle "$WT_BACKTITLE" --yesno "Möchtest du das System wirklich jetzt neustarten?" 10 50; then
+                    reboot
+                    exit 0
+                fi
+                ;;
+            7)
+                if whiptail --backtitle "$WT_BACKTITLE" --yesno "Möchtest du das System wirklich jetzt herunterfahren?" 10 50; then
+                    poweroff
+                    exit 0
+                fi
+                ;;
+        esac
+    done
+}
+
+main_menu
+clear
+echo "dbsKioskPi Konfiguration beendet. Du kannst das Menü jederzeit mit 'sudo dbs-config' erneut aufrufen."

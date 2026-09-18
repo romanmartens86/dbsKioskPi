@@ -16,53 +16,124 @@ from flask import Flask, render_template, request, jsonify, Response
 from provisioner import SSHProvisioner
 
 app = Flask(__name__)
-SETTINGS_FILE = "/data/settings.json"
-LOCAL_LOG_FILE = "/data/dbskiosk-install.log"
-if not os.path.exists("/data"):
-    SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
-    LOCAL_LOG_FILE = os.path.join(os.path.dirname(__file__), "dbskiosk-install.log")
+DATA_DIR = "/data"
+if not os.path.exists(DATA_DIR):
+    DATA_DIR = os.path.dirname(__file__)
+
+DEVICES_FILE = os.path.join(DATA_DIR, "devices.json")
+OLD_SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+LOCAL_LOG_FILE = os.path.join(DATA_DIR, "dbskiosk-install.log")
 
 # Queue for real-time log streaming
 log_queue = queue.Queue(maxsize=1000)
 is_provisioning = False
 
 
-def load_settings():
-    """Load stored Pi connection settings."""
-    if os.path.exists(SETTINGS_FILE):
+def load_fleet_data():
+    """Load stored fleet devices data, migrating old settings.json if needed."""
+    if os.path.exists(DEVICES_FILE):
         try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            with open(DEVICES_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             pass
-    return {
-        "host": "",
-        "port": 22,
-        "username": "pi",
-        "password": "",
-        "api_port": 8088
+
+    # Migration from old settings.json
+    devices = []
+    active_id = "kiosk_1"
+    if os.path.exists(OLD_SETTINGS_FILE):
+        try:
+            with open(OLD_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                old = json.load(f)
+                if old.get("host"):
+                    devices.append({
+                        "id": "kiosk_1",
+                        "name": "Kiosk 1 (Standard)",
+                        "host": old.get("host", ""),
+                        "port": int(old.get("port", 22)),
+                        "username": old.get("username", "dbsadmin"),
+                        "password": old.get("password", ""),
+                        "api_port": int(old.get("api_port", 8088)),
+                        "bell_enabled": True,
+                        "bell_volume": 80
+                    })
+        except Exception:
+            pass
+
+    if not devices:
+        devices.append({
+            "id": "kiosk_1",
+            "name": "Kiosk 1",
+            "host": "",
+            "port": 22,
+            "username": "dbsadmin",
+            "password": "",
+            "api_port": 8088,
+            "bell_enabled": True,
+            "bell_volume": 80
+        })
+
+    fleet_data = {
+        "active_device_id": active_id,
+        "central_bell_schedule": [],
+        "devices": devices
     }
+    save_fleet_data(fleet_data)
+    return fleet_data
 
 
-def save_settings(data):
-    """Save Pi connection settings."""
+def save_fleet_data(data):
+    """Save fleet devices data."""
     try:
-        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+        os.makedirs(os.path.dirname(DEVICES_FILE), exist_ok=True)
     except Exception:
         pass
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+    with open(DEVICES_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 
-def get_pi_auth(settings):
+def get_active_device(fleet_data=None, device_id=None):
+    """Get the currently selected or specified device."""
+    if not fleet_data:
+        fleet_data = load_fleet_data()
+    target_id = device_id or fleet_data.get("active_device_id")
+    devices = fleet_data.get("devices", [])
+    for dev in devices:
+        if dev.get("id") == target_id:
+            return dev
+    if devices:
+        return devices[0]
+    return {
+        "id": "kiosk_1",
+        "name": "Kiosk 1",
+        "host": "",
+        "port": 22,
+        "username": "dbsadmin",
+        "password": "",
+        "api_port": 8088,
+        "bell_enabled": True,
+        "bell_volume": 80
+    }
+
+
+def mask_device(dev):
+    """Return a copy of device dictionary with masked password."""
+    masked = dict(dev)
+    has_pwd = bool(masked.get("password"))
+    masked["has_password"] = has_pwd
+    masked["password"] = "••••••••" if has_pwd else ""
+    return masked
+
+
+def get_pi_auth(device):
     """Returns requests HTTP basic auth tuple."""
-    return (settings.get("username", "pi"), settings.get("password", ""))
+    return (device.get("username", "dbsadmin"), device.get("password", ""))
 
 
-def get_pi_api_base(settings):
+def get_pi_api_base(device):
     """Returns base URL for the Pi REST API."""
-    host = settings.get("host", "127.0.0.1")
-    port = settings.get("api_port", 8088)
+    host = device.get("host", "127.0.0.1")
+    port = device.get("api_port", 8088)
     return f"http://{host}:{port}"
 
 
@@ -72,39 +143,272 @@ def get_pi_api_base(settings):
 @app.route("/")
 def index():
     ingress_path = request.headers.get("X-Ingress-Path", "")
-    settings = load_settings()
-    masked = dict(settings)
-    if masked.get("password"):
-        masked["has_password"] = True
-        masked["password"] = "••••••••"
-    else:
-        masked["has_password"] = False
-    return render_template("index.html", ingress_path=ingress_path, settings=masked)
+    fleet = load_fleet_data()
+    active_dev = get_active_device(fleet)
+    masked_dev = mask_device(active_dev)
+    masked_devices = [mask_device(d) for d in fleet.get("devices", [])]
+    return render_template(
+        "index.html",
+        ingress_path=ingress_path,
+        settings=masked_dev,
+        devices=masked_devices,
+        active_device_id=fleet.get("active_device_id", "kiosk_1")
+    )
 
 
 # ------------------------------------------------------------------------------
-# Settings Endpoints
+# Fleet & Device Management Endpoints
 # ------------------------------------------------------------------------------
-@app.route("/api/settings", methods=["GET", "POST"])
-def handle_settings():
+@app.route("/api/devices", methods=["GET", "POST"])
+def handle_devices():
+    fleet = load_fleet_data()
     if request.method == "POST":
         data = request.json or {}
-        current = load_settings()
-        current["host"] = data.get("host", "").strip()
-        current["port"] = int(data.get("port", 22))
-        current["username"] = data.get("username", "pi").strip()
-        # Keep old password if not updated
+        dev_id = data.get("id", "").strip()
+        name = data.get("name", "").strip() or "Neuer Kiosk"
+        host = data.get("host", "").strip()
+        port = int(data.get("port", 22))
+        username = data.get("username", "dbsadmin").strip()
+        password = data.get("password", "")
+        api_port = int(data.get("api_port", 8088))
+        bell_enabled = bool(data.get("bell_enabled", True))
+        bell_volume = int(data.get("bell_volume", 80))
+
+        # Check if updating existing device
+        existing = None
+        for dev in fleet.get("devices", []):
+            if dev.get("id") == dev_id:
+                existing = dev
+                break
+
+        if existing:
+            existing["name"] = name
+            existing["host"] = host
+            existing["port"] = port
+            existing["username"] = username
+            if password and password != "••••••••":
+                existing["password"] = password
+            existing["api_port"] = api_port
+            existing["bell_enabled"] = bell_enabled
+            existing["bell_volume"] = bell_volume
+        else:
+            # Create new device
+            import uuid
+            new_id = dev_id if dev_id else f"kiosk_{uuid.uuid4().hex[:6]}"
+            new_dev = {
+                "id": new_id,
+                "name": name,
+                "host": host,
+                "port": port,
+                "username": username,
+                "password": password if password != "••••••••" else "",
+                "api_port": api_port,
+                "bell_enabled": bell_enabled,
+                "bell_volume": bell_volume
+            }
+            fleet.setdefault("devices", []).append(new_dev)
+            fleet["active_device_id"] = new_id
+
+        save_fleet_data(fleet)
+        return jsonify({"success": True, "message": "Gerät gespeichert", "devices": [mask_device(d) for d in fleet["devices"]]})
+
+    # GET: Return all devices
+    masked = [mask_device(d) for d in fleet.get("devices", [])]
+    return jsonify({
+        "active_device_id": fleet.get("active_device_id"),
+        "devices": masked
+    })
+
+
+@app.route("/api/devices/select", methods=["POST"])
+def select_device():
+    data = request.json or {}
+    dev_id = data.get("id")
+    fleet = load_fleet_data()
+    found = any(d.get("id") == dev_id for d in fleet.get("devices", []))
+    if not found:
+        return jsonify({"success": False, "error": "Gerät nicht gefunden"}), 404
+    fleet["active_device_id"] = dev_id
+    save_fleet_data(fleet)
+    active = get_active_device(fleet, dev_id)
+    return jsonify({"success": True, "active_device": mask_device(active)})
+
+
+@app.route("/api/devices/delete", methods=["POST"])
+def delete_device():
+    data = request.json or {}
+    dev_id = data.get("id")
+    fleet = load_fleet_data()
+    devices = fleet.get("devices", [])
+    if len(devices) <= 1:
+        return jsonify({"success": False, "error": "Mindestens ein Gerät muss erhalten bleiben"}), 400
+
+    new_devices = [d for d in devices if d.get("id") != dev_id]
+    if len(new_devices) == len(devices):
+        return jsonify({"success": False, "error": "Gerät nicht gefunden"}), 404
+
+    fleet["devices"] = new_devices
+    if fleet.get("active_device_id") == dev_id:
+        fleet["active_device_id"] = new_devices[0]["id"]
+
+    save_fleet_data(fleet)
+    return jsonify({"success": True, "devices": [mask_device(d) for d in new_devices]})
+
+
+@app.route("/api/fleet/status")
+def fleet_status():
+    """Poll live status for all devices in parallel for the fleet overview."""
+    fleet = load_fleet_data()
+    devices = fleet.get("devices", [])
+    results = []
+
+    def check_dev(dev):
+        masked = mask_device(dev)
+        host = dev.get("host")
+        if not host:
+            masked["status"] = "unconfigured"
+            masked["online"] = False
+            return masked
+
+        base_url = get_pi_api_base(dev)
+        try:
+            resp = requests.get(f"{base_url}/api/status", auth=get_pi_auth(dev), timeout=2.5)
+            if resp.status_code == 200:
+                data = resp.json()
+                masked["online"] = True
+                masked["status"] = "online"
+                masked["live_status"] = data
+            else:
+                masked["online"] = False
+                masked["status"] = "error"
+        except Exception:
+            masked["online"] = False
+            masked["status"] = "offline"
+        return masked
+
+    threads = []
+    res_queue = queue.Queue()
+    for dev in devices:
+        t = threading.Thread(target=lambda d: res_queue.put(check_dev(d)), args=(dev,))
+        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join(timeout=3.0)
+
+    while not res_queue.empty():
+        results.append(res_queue.get())
+
+    # Keep original order
+    ordered = []
+    for dev in devices:
+        for r in results:
+            if r.get("id") == dev.get("id"):
+                ordered.append(r)
+                break
+
+    return jsonify({"devices": ordered, "active_device_id": fleet.get("active_device_id")})
+
+
+@app.route("/api/fleet/action", methods=["POST"])
+def fleet_action():
+    """Execute action across all devices (screen_on, screen_off, reload)."""
+    data = request.json or {}
+    action = data.get("action")
+    target_ids = data.get("device_ids")
+
+    fleet = load_fleet_data()
+    devices = fleet.get("devices", [])
+    if target_ids:
+        devices = [d for d in devices if d.get("id") in target_ids]
+
+    def do_action(dev):
+        base_url = get_pi_api_base(dev)
+        auth = get_pi_auth(dev)
+        try:
+            if action == "screen_on":
+                requests.post(f"{base_url}/api/screen", json={"state": "on"}, auth=auth, timeout=4)
+            elif action == "screen_off":
+                requests.post(f"{base_url}/api/screen", json={"state": "off"}, auth=auth, timeout=4)
+            elif action == "reload":
+                requests.post(f"{base_url}/api/kiosk/reload", json={}, auth=auth, timeout=4)
+        except Exception:
+            pass
+
+    for dev in devices:
+        threading.Thread(target=do_action, args=(dev,), daemon=True).start()
+
+    return jsonify({"success": True, "message": f"Aktion '{action}' an {len(devices)} Displays gesendet"})
+
+
+@app.route("/api/kiosk/copy-playlist", methods=["POST"])
+def copy_playlist():
+    """Copy playlist from source device to target devices."""
+    data = request.json or {}
+    source_id = data.get("source_device_id")
+    target_ids = data.get("target_device_ids", [])
+
+    if not source_id or not target_ids:
+        return jsonify({"success": False, "error": "Quelle und Ziele müssen angegeben werden"}), 400
+
+    fleet = load_fleet_data()
+    source_dev = get_active_device(fleet, source_id)
+    if not source_dev:
+        return jsonify({"success": False, "error": "Quellgerät nicht gefunden"}), 404
+
+    base_url = get_pi_api_base(source_dev)
+    try:
+        resp = requests.get(f"{base_url}/api/kiosk/playlist", auth=get_pi_auth(source_dev), timeout=5)
+        if resp.status_code != 200:
+            return jsonify({"success": False, "error": "Konnte Playlist von Quellgerät nicht laden"}), 502
+        playlist_data = resp.json()
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Verbindungsfehler zur Quelle: {e}"}), 502
+
+    copied = 0
+    errors = []
+    for dev in fleet.get("devices", []):
+        if dev.get("id") in target_ids and dev.get("id") != source_id:
+            try:
+                t_base = get_pi_api_base(dev)
+                t_resp = requests.post(f"{t_base}/api/kiosk/playlist", json=playlist_data, auth=get_pi_auth(dev), timeout=5)
+                if t_resp.status_code == 200:
+                    copied += 1
+                else:
+                    errors.append(f"{dev.get('name')}: Status {t_resp.status_code}")
+            except Exception as e:
+                errors.append(f"{dev.get('name')}: {e}")
+
+    return jsonify({
+        "success": True,
+        "copied": copied,
+        "errors": errors,
+        "message": f"Playlist erfolgreich auf {copied} Display(s) übertragen"
+    })
+
+
+# Compatibility endpoint
+@app.route("/api/settings", methods=["GET", "POST"])
+def handle_settings():
+    fleet = load_fleet_data()
+    dev = get_active_device(fleet)
+    if request.method == "POST":
+        data = request.json or {}
+        if data.get("name"):
+            dev["name"] = data.get("name").strip()
+        dev["host"] = data.get("host", "").strip()
+        dev["port"] = int(data.get("port", 22))
+        dev["username"] = data.get("username", "dbsadmin").strip()
         if data.get("password") and data.get("password") != "••••••••":
-            current["password"] = data["password"]
-        current["api_port"] = int(data.get("api_port", 8088))
-        save_settings(current)
+            dev["password"] = data["password"]
+        dev["api_port"] = int(data.get("api_port", 8088))
+        if "bell_enabled" in data:
+            dev["bell_enabled"] = bool(data["bell_enabled"])
+        if "bell_volume" in data:
+            dev["bell_volume"] = int(data["bell_volume"])
+        save_fleet_data(fleet)
         return jsonify({"success": True, "message": "Einstellungen gespeichert"})
 
-    settings = load_settings()
-    masked = dict(settings)
-    masked["has_password"] = bool(settings.get("password"))
-    masked["password"] = "••••••••" if masked["has_password"] else ""
-    return jsonify(masked)
+    return jsonify(mask_device(dev))
 
 
 # ------------------------------------------------------------------------------
@@ -113,13 +417,16 @@ def handle_settings():
 @app.route("/api/test-ssh", methods=["POST"])
 def test_ssh():
     data = request.json or {}
-    settings = load_settings()
-    host = data.get("host") or settings.get("host")
-    port = int(data.get("port") or settings.get("port", 22))
-    username = data.get("username") or settings.get("username", "pi")
+    fleet = load_fleet_data()
+    dev_id = data.get("device_id")
+    device = get_active_device(fleet, dev_id)
+
+    host = data.get("host") or device.get("host")
+    port = int(data.get("port") or device.get("port", 22))
+    username = data.get("username") or device.get("username", "dbsadmin")
     password = data.get("password")
     if not password or password == "••••••••":
-        password = settings.get("password", "")
+        password = device.get("password", "")
 
     if not host:
         return jsonify({"success": False, "error": "Bitte IP-Adresse eingeben"}), 400
@@ -127,23 +434,23 @@ def test_ssh():
     provisioner = SSHProvisioner(host=host, port=port, username=username, password=password)
     result = provisioner.test_connection()
     if result.get("success"):
-        settings["host"] = host
-        settings["port"] = port
-        settings["username"] = username
+        device["host"] = host
+        device["port"] = port
+        device["username"] = username
         if password and password != "••••••••":
-            settings["password"] = password
-        save_settings(settings)
+            device["password"] = password
+        if data.get("name"):
+            device["name"] = data.get("name").strip()
+        save_fleet_data(fleet)
 
         # Falls dbs-api auf dem Pi existiert, stelle sicher, dass die neue Version aktiv ist und Auth passt
         try:
             client = provisioner.connect(timeout=6)
             stdin, stdout, stderr = client.exec_command("[ -f /usr/local/bin/dbs-api ] && echo 'exists'")
             if stdout.read().decode().strip() == "exists":
-                # api_auth.conf anlegen für zuverlässige HTTP Basic Auth
                 if password:
                     client.exec_command(f"echo '{username}:{password}' | sudo tee /etc/dbskiosk/api_auth.conf >/dev/null && sudo chmod 600 /etc/dbskiosk/api_auth.conf")
                 
-                # Aktualisiertes dbs-api.py übertragen (ohne cgi Modul für Python 3.13)
                 pkg_api = os.path.join(os.path.dirname(__file__), "..", "package", "files", "dbs-api.py")
                 if not os.path.exists(pkg_api):
                     pkg_api = "/app/package/files/dbs-api.py"
@@ -166,23 +473,27 @@ def start_provisioning():
         return jsonify({"success": False, "error": "Eine Installation läuft bereits!"}), 400
 
     data = request.json or {}
-    settings = load_settings()
-    host = data.get("host") or settings.get("host")
-    port = int(data.get("port") or settings.get("port", 22))
-    username = data.get("username") or settings.get("username", "pi")
+    fleet = load_fleet_data()
+    dev_id = data.get("device_id")
+    device = get_active_device(fleet, dev_id)
+
+    host = data.get("host") or device.get("host")
+    port = int(data.get("port") or device.get("port", 22))
+    username = data.get("username") or device.get("username", "dbsadmin")
     password = data.get("password")
     if not password or password == "••••••••":
-        password = settings.get("password", "")
+        password = device.get("password", "")
 
     if not host or not password:
         return jsonify({"success": False, "error": "IP-Adresse und Passwort sind erforderlich"}), 400
 
-    # Save connection settings
-    settings["host"] = host
-    settings["port"] = port
-    settings["username"] = username
-    settings["password"] = password
-    save_settings(settings)
+    device["host"] = host
+    device["port"] = port
+    device["username"] = username
+    device["password"] = password
+    if data.get("name"):
+        device["name"] = data.get("name").strip()
+    save_fleet_data(fleet)
 
     # Empty queue
     while not log_queue.empty():
@@ -193,7 +504,7 @@ def start_provisioning():
 
     try:
         with open(LOCAL_LOG_FILE, "w", encoding="utf-8") as f:
-            f.write(f"=== dbsKioskPi Installation gestartet am {time.strftime('%Y-%m-%d %H:%M:%S')} für {host} ===\n")
+            f.write(f"=== dbsKioskPi Installation gestartet am {time.strftime('%Y-%m-%d %H:%M:%S')} für {device.get('name')} ({host}) ===\n")
     except Exception:
         pass
 
@@ -209,7 +520,7 @@ def start_provisioning():
             except Exception:
                 pass
 
-        log_cb("[START] Starte Remote-Provisioning für dbsKioskPi...")
+        log_cb(f"[START] Starte Remote-Provisioning für {device.get('name')} ({host})...")
         prov = SSHProvisioner(host=host, port=port, username=username, password=password)
         res = prov.run_installation(log_callback=log_cb)
 
@@ -246,13 +557,16 @@ def download_provision_log():
 
 @app.route("/api/pi/download-install-log")
 def download_pi_install_log():
-    """Download the actual installation log from the Raspberry Pi (/var/log/dbskiosk-install.log)."""
-    settings = load_settings()
-    host = settings.get("host")
-    port = int(settings.get("port", 22))
-    username = settings.get("username", "pi")
-    password = settings.get("password", "")
-    api_port = int(settings.get("api_port", 8088))
+    """Download the actual installation log from the target Raspberry Pi."""
+    fleet = load_fleet_data()
+    dev_id = request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+
+    host = device.get("host")
+    port = int(device.get("port", 22))
+    username = device.get("username", "dbsadmin")
+    password = device.get("password", "")
+    api_port = int(device.get("api_port", 8088))
 
     if not host:
         return jsonify({"error": "Keine IP-Adresse konfiguriert"}), 400
@@ -265,7 +579,7 @@ def download_pi_install_log():
             return Response(
                 resp.content,
                 mimetype="text/plain; charset=utf-8",
-                headers={"Content-Disposition": "inline; filename=dbskiosk-install.txt"}
+                headers={"Content-Disposition": f"inline; filename=dbskiosk-install-{device.get('id')}.txt"}
             )
     except Exception:
         pass
@@ -285,12 +599,12 @@ def download_pi_install_log():
             return Response(
                 content,
                 mimetype="text/plain; charset=utf-8",
-                headers={"Content-Disposition": "inline; filename=dbskiosk-install.txt"}
+                headers={"Content-Disposition": f"inline; filename=dbskiosk-install-{device.get('id')}.txt"}
             )
         except Exception:
             pass
 
-    # 3. Fallback auf das lokale Provisioning-Log, falls vorhanden
+    # 3. Fallback auf das lokale Provisioning-Log
     if os.path.exists(LOCAL_LOG_FILE):
         try:
             with open(LOCAL_LOG_FILE, "rb") as f:
@@ -303,18 +617,21 @@ def download_pi_install_log():
         except Exception:
             pass
 
-    return jsonify({"error": "Installationslog konnte weder vom Raspberry Pi noch lokal gefunden werden"}), 404
+    return jsonify({"error": "Installationslog konnte nicht gefunden werden"}), 404
 
 
 @app.route("/api/pi/download-config-log")
 def download_pi_config_log():
     """Download the configuration change log from the Raspberry Pi (/var/log/dbskiosk-config.log)."""
-    settings = load_settings()
-    host = settings.get("host")
-    port = int(settings.get("port", 22))
-    username = settings.get("username", "pi")
-    password = settings.get("password", "")
-    api_port = int(settings.get("api_port", 8088))
+    fleet = load_fleet_data()
+    dev_id = request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+
+    host = device.get("host")
+    port = int(device.get("port", 22))
+    username = device.get("username", "dbsadmin")
+    password = device.get("password", "")
+    api_port = int(device.get("api_port", 8088))
 
     if not host:
         return jsonify({"error": "Keine IP-Adresse konfiguriert"}), 400
@@ -326,7 +643,7 @@ def download_pi_config_log():
             return Response(
                 resp.content,
                 mimetype="text/plain; charset=utf-8",
-                headers={"Content-Disposition": "attachment; filename=dbskiosk-config.log"}
+                headers={"Content-Disposition": f"attachment; filename=dbskiosk-config-{device.get('id')}.log"}
             )
     except Exception:
         pass
@@ -345,7 +662,7 @@ def download_pi_config_log():
             return Response(
                 content,
                 mimetype="text/plain; charset=utf-8",
-                headers={"Content-Disposition": "attachment; filename=dbskiosk-config.log"}
+                headers={"Content-Disposition": f"attachment; filename=dbskiosk-config-{device.get('id')}.log"}
             )
         except Exception as e:
             return jsonify({"error": f"Konfigurationslog nicht verfügbar: {e}"}), 404
@@ -356,12 +673,15 @@ def download_pi_config_log():
 @app.route("/api/pi/healthcheck")
 def download_pi_healthcheck():
     """Download or view the system healthcheck diagnostic report."""
-    settings = load_settings()
-    host = settings.get("host")
-    port = int(settings.get("port", 22))
-    username = settings.get("username", "pi")
-    password = settings.get("password", "")
-    api_port = int(settings.get("api_port", 8088))
+    fleet = load_fleet_data()
+    dev_id = request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+
+    host = device.get("host")
+    port = int(device.get("port", 22))
+    username = device.get("username", "dbsadmin")
+    password = device.get("password", "")
+    api_port = int(device.get("api_port", 8088))
 
     if not host:
         return jsonify({"error": "Keine IP-Adresse konfiguriert"}), 400
@@ -374,7 +694,7 @@ def download_pi_healthcheck():
             return Response(
                 resp.content,
                 mimetype="text/plain; charset=utf-8",
-                headers={"Content-Disposition": "inline; filename=dbskiosk-healthcheck.txt"}
+                headers={"Content-Disposition": f"inline; filename=dbskiosk-healthcheck-{device.get('id')}.txt"}
             )
     except Exception:
         pass
@@ -398,7 +718,7 @@ def download_pi_healthcheck():
             return Response(
                 content,
                 mimetype="text/plain; charset=utf-8",
-                headers={"Content-Disposition": "inline; filename=dbskiosk-healthcheck.txt"}
+                headers={"Content-Disposition": f"inline; filename=dbskiosk-healthcheck-{device.get('id')}.txt"}
             )
         except Exception as e:
             return jsonify({"error": f"Healthcheck nicht erreichbar: {e}"}), 500
@@ -408,13 +728,17 @@ def download_pi_healthcheck():
 
 @app.route("/api/pi/healthcheck/run", methods=["POST"])
 def run_pi_healthcheck():
-    """Trigger a fresh live healthcheck run on the Raspberry Pi."""
-    settings = load_settings()
-    host = settings.get("host")
-    port = int(settings.get("port", 22))
-    username = settings.get("username", "pi")
-    password = settings.get("password", "")
-    api_port = int(settings.get("api_port", 8088))
+    """Trigger a fresh live healthcheck run on the target Raspberry Pi."""
+    fleet = load_fleet_data()
+    data = request.json or {}
+    dev_id = data.get("device_id") or request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+
+    host = device.get("host")
+    port = int(device.get("port", 22))
+    username = device.get("username", "dbsadmin")
+    password = device.get("password", "")
+    api_port = int(device.get("api_port", 8088))
 
     if not host:
         return jsonify({"error": "Keine IP-Adresse konfiguriert"}), 400
@@ -455,7 +779,6 @@ def provision_stream():
                     break
                 yield f"data: {line}\n\n"
             except queue.Empty:
-                # Keep-alive heartbeat
                 yield ": keepalive\n\n"
 
     return Response(event_stream(), mimetype="text/event-stream")
@@ -466,10 +789,12 @@ def provision_stream():
 # ------------------------------------------------------------------------------
 @app.route("/api/kiosk/status")
 def get_kiosk_status():
-    settings = load_settings()
-    base_url = get_pi_api_base(settings)
+    fleet = load_fleet_data()
+    dev_id = request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+    base_url = get_pi_api_base(device)
     try:
-        resp = requests.get(f"{base_url}/api/status", auth=get_pi_auth(settings), timeout=4)
+        resp = requests.get(f"{base_url}/api/status", auth=get_pi_auth(device), timeout=4)
         return Response(resp.content, status=resp.status_code, content_type="application/json")
     except Exception as e:
         return jsonify({"error": "Pi nicht erreichbar", "details": str(e), "status": "offline"}), 503
@@ -477,13 +802,18 @@ def get_kiosk_status():
 
 @app.route("/api/kiosk/playlist", methods=["GET", "POST"])
 def handle_playlist():
-    settings = load_settings()
-    base_url = get_pi_api_base(settings)
+    fleet = load_fleet_data()
+    dev_id = request.args.get("device_id")
+    if request.method == "POST":
+        data = request.json or {}
+        dev_id = data.get("device_id") or dev_id
+    device = get_active_device(fleet, dev_id)
+    base_url = get_pi_api_base(device)
     try:
         if request.method == "POST":
-            resp = requests.post(f"{base_url}/api/kiosk/playlist", json=request.json, auth=get_pi_auth(settings), timeout=8)
+            resp = requests.post(f"{base_url}/api/kiosk/playlist", json=request.json, auth=get_pi_auth(device), timeout=8)
         else:
-            resp = requests.get(f"{base_url}/api/kiosk/playlist", auth=get_pi_auth(settings), timeout=4)
+            resp = requests.get(f"{base_url}/api/kiosk/playlist", auth=get_pi_auth(device), timeout=4)
         return Response(resp.content, status=resp.status_code, content_type="application/json")
     except Exception as e:
         return jsonify({"error": str(e)}), 503
@@ -491,24 +821,52 @@ def handle_playlist():
 
 @app.route("/api/bell/schedule", methods=["GET", "POST"])
 def handle_bell_schedule():
-    settings = load_settings()
-    base_url = get_pi_api_base(settings)
+    fleet = load_fleet_data()
+    if request.method == "POST":
+        data = request.json or {}
+        fleet["central_bell_schedule"] = data.get("schedule", [])
+        save_fleet_data(fleet)
+
+        # Distribute schedule to all fleet devices that have bell_enabled
+        synced = 0
+        for dev in fleet.get("devices", []):
+            if dev.get("bell_enabled", True) and dev.get("host"):
+                try:
+                    b_url = get_pi_api_base(dev)
+                    requests.post(f"{b_url}/api/bell/schedule", json=data, auth=get_pi_auth(dev), timeout=4)
+                    synced += 1
+                except Exception:
+                    pass
+
+        return jsonify({"success": True, "message": f"Glockenplan gespeichert und an {synced} Display(s) verteilt", "schedule": fleet["central_bell_schedule"]})
+
+    # GET: If central schedule exists return it, otherwise try to load from active device
+    if fleet.get("central_bell_schedule"):
+        return jsonify({"schedule": fleet["central_bell_schedule"]})
+
+    dev_id = request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+    base_url = get_pi_api_base(device)
     try:
-        if request.method == "POST":
-            resp = requests.post(f"{base_url}/api/bell/schedule", json=request.json, auth=get_pi_auth(settings), timeout=8)
-        else:
-            resp = requests.get(f"{base_url}/api/bell/schedule", auth=get_pi_auth(settings), timeout=4)
+        resp = requests.get(f"{base_url}/api/bell/schedule", auth=get_pi_auth(device), timeout=4)
+        if resp.status_code == 200:
+            sched = resp.json().get("schedule", [])
+            fleet["central_bell_schedule"] = sched
+            save_fleet_data(fleet)
         return Response(resp.content, status=resp.status_code, content_type="application/json")
     except Exception as e:
-        return jsonify({"error": str(e)}), 503
+        return jsonify({"error": str(e), "schedule": []}), 200
 
 
 @app.route("/api/bell/play", methods=["POST"])
 def play_bell():
-    settings = load_settings()
-    base_url = get_pi_api_base(settings)
+    fleet = load_fleet_data()
+    data = request.json or {}
+    dev_id = data.get("device_id") or request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+    base_url = get_pi_api_base(device)
     try:
-        resp = requests.post(f"{base_url}/api/bell/play", json=request.json or {}, auth=get_pi_auth(settings), timeout=5)
+        resp = requests.post(f"{base_url}/api/bell/play", json=data, auth=get_pi_auth(device), timeout=5)
         return Response(resp.content, status=resp.status_code, content_type="application/json")
     except Exception as e:
         return jsonify({"error": str(e)}), 503
@@ -519,22 +877,35 @@ def upload_bell():
     if "file" not in request.files:
         return jsonify({"error": "Keine Audiodatei übergeben"}), 400
     file = request.files["file"]
-    settings = load_settings()
-    base_url = get_pi_api_base(settings)
-    try:
-        files = {"file": (file.filename, file.read(), file.content_type)}
-        resp = requests.post(f"{base_url}/api/bell/upload", files=files, auth=get_pi_auth(settings), timeout=15)
-        return Response(resp.content, status=resp.status_code, content_type="application/json")
-    except Exception as e:
-        return jsonify({"error": str(e)}), 503
+    file_bytes = file.read()
+    file_name = file.filename
+    file_type = file.content_type
+
+    fleet = load_fleet_data()
+    # Upload sound to ALL reachable devices in fleet so audio files are available everywhere
+    uploaded = 0
+    for dev in fleet.get("devices", []):
+        if dev.get("host"):
+            try:
+                base_url = get_pi_api_base(dev)
+                files = {"file": (file_name, file_bytes, file_type)}
+                requests.post(f"{base_url}/api/bell/upload", files=files, auth=get_pi_auth(dev), timeout=12)
+                uploaded += 1
+            except Exception:
+                pass
+
+    return jsonify({"success": True, "message": f"Audiodatei auf {uploaded} Display(s) hochgeladen"})
 
 
 @app.route("/api/cec/screen", methods=["POST"])
 def control_screen():
-    settings = load_settings()
-    base_url = get_pi_api_base(settings)
+    fleet = load_fleet_data()
+    data = request.json or {}
+    dev_id = data.get("device_id") or request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+    base_url = get_pi_api_base(device)
     try:
-        resp = requests.post(f"{base_url}/api/screen", json=request.json or {}, auth=get_pi_auth(settings), timeout=5)
+        resp = requests.post(f"{base_url}/api/screen", json=data, auth=get_pi_auth(device), timeout=5)
         return Response(resp.content, status=resp.status_code, content_type="application/json")
     except Exception as e:
         return jsonify({"error": str(e)}), 503
@@ -542,10 +913,13 @@ def control_screen():
 
 @app.route("/api/cec/schedule", methods=["POST"])
 def set_cec_schedule():
-    settings = load_settings()
-    base_url = get_pi_api_base(settings)
+    fleet = load_fleet_data()
+    data = request.json or {}
+    dev_id = data.get("device_id") or request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+    base_url = get_pi_api_base(device)
     try:
-        resp = requests.post(f"{base_url}/api/schedule", json=request.json or {}, auth=get_pi_auth(settings), timeout=5)
+        resp = requests.post(f"{base_url}/api/schedule", json=data, auth=get_pi_auth(device), timeout=5)
         return Response(resp.content, status=resp.status_code, content_type="application/json")
     except Exception as e:
         return jsonify({"error": str(e)}), 503

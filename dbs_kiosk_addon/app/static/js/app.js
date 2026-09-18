@@ -1,10 +1,15 @@
-// dbsKioskPi Manager Frontend Logic
+// dbsKioskPi Manager Frontend Logic - Multi-Device Fleet Edition
 
 const basePath = window.INGRESS_PATH || '';
 
 function apiUrl(path) {
   return `${basePath}${path}`;
 }
+
+let fleetDevices = [];
+let activeDeviceId = null;
+let playlistItems = [];
+let bellSchedule = [];
 
 function showToast(message, isError = false) {
   const toast = document.getElementById('toast');
@@ -20,15 +25,424 @@ function switchTab(tabId) {
   document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
 
-  const activeBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
+  const activeBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick') && b.getAttribute('onclick').includes(tabId));
   if (activeBtn) activeBtn.classList.add('active');
 
   const content = document.getElementById(`tab-${tabId}`);
   if (content) content.classList.add('active');
 
+  if (tabId === 'fleet') loadFleetDashboard();
   if (tabId === 'kiosk') loadPlaylist();
   if (tabId === 'bell') { loadBellSchedule(); fetchStatus(); }
   if (tabId === 'status') fetchStatus();
+}
+
+// -----------------------------------------------------------------------------
+// Fleet & Device Management
+// -----------------------------------------------------------------------------
+async function loadFleetData() {
+  try {
+    const res = await fetch(apiUrl('/api/devices'));
+    if (res.ok) {
+      const data = await res.json();
+      fleetDevices = data.devices || [];
+      activeDeviceId = data.active_device_id || (fleetDevices[0] ? fleetDevices[0].id : null);
+      updateDeviceSelectDropdown();
+      populateSetupFormWithActiveDevice();
+    }
+  } catch (e) {
+    console.error('Konnte Geräte nicht laden:', e);
+  }
+}
+
+function updateDeviceSelectDropdown() {
+  const select = document.getElementById('device-select');
+  if (!select) return;
+  select.innerHTML = '';
+  fleetDevices.forEach(dev => {
+    const opt = document.createElement('option');
+    opt.value = dev.id;
+    opt.innerText = `📍 ${dev.name || 'Kiosk'} (${dev.host || 'Nicht konfiguriert'})`;
+    if (dev.id === activeDeviceId) opt.selected = true;
+    select.appendChild(opt);
+  });
+
+  const activeDev = fleetDevices.find(d => d.id === activeDeviceId) || fleetDevices[0];
+  const ind = document.getElementById('active-device-indicator');
+  if (ind && activeDev) {
+    ind.innerText = `Display: ${activeDev.name} (${activeDev.host || 'Keine IP'})`;
+  }
+}
+
+function populateSetupFormWithActiveDevice() {
+  const activeDev = fleetDevices.find(d => d.id === activeDeviceId) || fleetDevices[0];
+  if (!activeDev) return;
+
+  const nameInput = document.getElementById('dev-name');
+  const hostInput = document.getElementById('ssh-host');
+  const portInput = document.getElementById('ssh-port');
+  const userInput = document.getElementById('ssh-user');
+  const passInput = document.getElementById('ssh-pass');
+  const bellCheck = document.getElementById('bell-enabled-check');
+  const bellVolSlider = document.getElementById('bell-volume-slider');
+  const bellVolVal = document.getElementById('bell-volume-val');
+
+  if (nameInput) nameInput.value = activeDev.name || '';
+  if (hostInput) hostInput.value = activeDev.host || '';
+  if (portInput) portInput.value = activeDev.port || 22;
+  if (userInput) userInput.value = activeDev.username || 'dbsadmin';
+  if (passInput) {
+    passInput.value = activeDev.password || '';
+    passInput.placeholder = activeDev.has_password ? '••••••••' : 'Passwort eingeben';
+  }
+  if (bellCheck) bellCheck.checked = activeDev.bell_enabled !== false;
+  if (bellVolSlider) {
+    const vol = activeDev.bell_volume !== undefined ? activeDev.bell_volume : 80;
+    bellVolSlider.value = vol;
+    if (bellVolVal) bellVolVal.innerText = `${vol}%`;
+  }
+}
+
+async function onDeviceSelectChange(devId) {
+  try {
+    const res = await fetch(apiUrl('/api/devices/select'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: devId })
+    });
+    const data = await res.json();
+    if (data.success) {
+      activeDeviceId = devId;
+      updateDeviceSelectDropdown();
+      populateSetupFormWithActiveDevice();
+      fetchStatus();
+      loadPlaylist();
+      showToast(`Aktives Display gewechselt zu: ${data.active_device.name}`);
+    }
+  } catch (e) {
+    showToast(`Fehler beim Wechseln: ${e}`, true);
+  }
+}
+
+async function promptNewDevice() {
+  const name = prompt('Name oder Standort des neuen Kiosks (z. B. "Flur Oben", "Mensa", "Lehrerzimmer"):');
+  if (!name || !name.trim()) return;
+
+  const host = prompt('IP-Adresse des Raspberry Pi (kann auch später eingetragen werden):', '');
+
+  try {
+    const res = await fetch(apiUrl('/api/devices'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name.trim(),
+        host: host ? host.trim() : '',
+        port: 22,
+        username: 'dbsadmin',
+        password: '',
+        api_port: 8088,
+        bell_enabled: true,
+        bell_volume: 80
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Kiosk "${name}" erfolgreich hinzugefügt!`);
+      await loadFleetData();
+      switchTab('setup');
+    } else {
+      showToast(`Fehler: ${data.error}`, true);
+    }
+  } catch (e) {
+    showToast(`Fehler beim Erstellen: ${e}`, true);
+  }
+}
+
+async function saveDeviceSettings() {
+  const name = document.getElementById('dev-name').value.trim();
+  const host = document.getElementById('ssh-host').value.trim();
+  const port = document.getElementById('ssh-port').value;
+  const username = document.getElementById('ssh-user').value.trim();
+  const password = document.getElementById('ssh-pass').value;
+
+  if (!name) {
+    showToast('Bitte einen Namen/Standort für das Gerät angeben', true);
+    return;
+  }
+
+  try {
+    const res = await fetch(apiUrl('/api/devices'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: activeDeviceId,
+        name,
+        host,
+        port,
+        username,
+        password,
+        api_port: 8088
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast('Geräteeinstellungen gespeichert!');
+      await loadFleetData();
+    } else {
+      showToast(`Fehler: ${data.error}`, true);
+    }
+  } catch (e) {
+    showToast(`Fehler: ${e}`, true);
+  }
+}
+
+async function deleteCurrentDevice() {
+  const activeDev = fleetDevices.find(d => d.id === activeDeviceId);
+  if (!activeDev) return;
+
+  if (!confirm(`Bist du sicher, dass du das Display "${activeDev.name}" aus der Verwaltung entfernen möchtest?`)) {
+    return;
+  }
+
+  try {
+    const res = await fetch(apiUrl('/api/devices/delete'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: activeDeviceId })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Display "${activeDev.name}" entfernt.`);
+      await loadFleetData();
+      switchTab('fleet');
+    } else {
+      showToast(`Fehler: ${data.error}`, true);
+    }
+  } catch (e) {
+    showToast(`Fehler: ${e}`, true);
+  }
+}
+
+async function updateDeviceBellSettings() {
+  const enabled = document.getElementById('bell-enabled-check').checked;
+  const slider = document.getElementById('bell-volume-slider');
+  const volume = parseInt(slider.value);
+  document.getElementById('bell-volume-val').innerText = `${volume}%`;
+
+  const activeDev = fleetDevices.find(d => d.id === activeDeviceId);
+  if (!activeDev) return;
+
+  try {
+    await fetch(apiUrl('/api/devices'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: activeDeviceId,
+        name: activeDev.name,
+        host: activeDev.host,
+        port: activeDev.port,
+        username: activeDev.username,
+        api_port: activeDev.api_port,
+        bell_enabled: enabled,
+        bell_volume: volume
+      })
+    });
+    showToast(`Glocke für "${activeDev.name}": ${enabled ? 'Aktiviert (' + volume + '%)' : 'Deaktiviert'}`);
+  } catch (e) {
+    showToast(`Fehler: ${e}`, true);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Fleet Dashboard Rendering
+// -----------------------------------------------------------------------------
+async function loadFleetDashboard() {
+  const grid = document.getElementById('fleet-grid');
+  if (!grid) return;
+
+  try {
+    const res = await fetch(apiUrl('/api/fleet/status'));
+    if (!res.ok) throw new Error('Statusabfrage fehlgeschlagen');
+    const data = await res.json();
+    const devices = data.devices || [];
+
+    grid.innerHTML = '';
+    if (devices.length === 0) {
+      grid.innerHTML = '<div style="padding: 24px; text-align: center; color: var(--text-secondary);">Noch keine Kiosk-Geräte angelegt. Klicke oben auf "➕ Neu".</div>';
+      return;
+    }
+
+    devices.forEach(dev => {
+      const card = document.createElement('div');
+      const isActive = dev.id === activeDeviceId;
+      card.className = `fleet-card ${isActive ? 'active-device' : ''}`;
+
+      const isOnline = dev.online === true;
+      const statusBadge = isOnline
+        ? '<span class="badge online"><span style="width: 7px; height: 7px; border-radius: 50%; background: currentColor;"></span> Online</span>'
+        : '<span class="badge offline"><span style="width: 7px; height: 7px; border-radius: 50%; background: currentColor;"></span> Offline</span>';
+
+      const live = dev.live_status || {};
+      const tvPower = live.screen_power ? (live.screen_power === 'on' ? '🟢 Ein' : '🌙 Standby') : (dev.host ? 'Unbekannt' : 'Nicht konfiguriert');
+      const currentUrl = live.kiosk_url ? (live.kiosk_url.length > 38 ? live.kiosk_url.substring(0, 35) + '...' : live.kiosk_url) : '-';
+      const bellStatus = dev.bell_enabled !== false ? `🔔 Aktiv (${dev.bell_volume || 80}%)` : '🔕 Stumm';
+
+      card.innerHTML = `
+        <div>
+          <div class="fleet-card-header">
+            <div>
+              <div class="fleet-card-title">📍 ${escapeHtml(dev.name)}</div>
+              <div class="fleet-card-ip">${dev.host || 'Keine IP hinterlegt'}</div>
+            </div>
+            <div>${statusBadge}</div>
+          </div>
+
+          <div class="fleet-card-body">
+            <div class="fleet-stat-row">
+              <span class="fleet-stat-label">HDMI-TV Status:</span>
+              <span class="fleet-stat-value">${tvPower}</span>
+            </div>
+            <div class="fleet-stat-row">
+              <span class="fleet-stat-label">Schulglocke:</span>
+              <span class="fleet-stat-value">${bellStatus}</span>
+            </div>
+            <div class="fleet-stat-row">
+              <span class="fleet-stat-label">Aktive Webseite:</span>
+              <span class="fleet-stat-value" style="font-family: monospace; font-size: 11px;">${escapeHtml(currentUrl)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="fleet-card-actions">
+          <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 10px;" onclick="selectDeviceAndTab('${dev.id}', 'kiosk')">
+            📺 Playlist
+          </button>
+          <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 10px;" onclick="selectDeviceAndTab('${dev.id}', 'cec')">
+            ⚡ TV-Steuerung
+          </button>
+          <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 10px;" onclick="selectDeviceAndTab('${dev.id}', 'setup')">
+            ⚙️ Setup
+          </button>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+
+  } catch (err) {
+    grid.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--danger);">Fehler beim Laden des Flottenstatus: ${err}</div>`;
+  }
+}
+
+async function triggerFleetAction(action) {
+  const names = {
+    screen_on: 'alle Fernseher einzuschalten',
+    screen_off: 'alle Fernseher in Standby zu versetzen',
+    reload: 'alle Kiosk-Bildschirme neu zu laden'
+  };
+  if (!confirm(`Möchtest du wirklich ${names[action] || action}?`)) return;
+
+  showToast('Sende Sammelbefehl an alle Displays...');
+  try {
+    const res = await fetch(apiUrl('/api/fleet/action'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(data.message);
+      setTimeout(loadFleetDashboard, 2000);
+    } else {
+      showToast(`Fehler: ${data.error}`, true);
+    }
+  } catch (e) {
+    showToast(`Fehler: ${e}`, true);
+  }
+}
+
+function selectDeviceAndTab(devId, tabId) {
+  onDeviceSelectChange(devId).then(() => {
+    switchTab(tabId);
+  });
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// -----------------------------------------------------------------------------
+// Copy Playlist Modal
+// -----------------------------------------------------------------------------
+function openCopyPlaylistModal() {
+  const modal = document.getElementById('copy-modal');
+  const sourceNameEl = document.getElementById('copy-source-name');
+  const targetList = document.getElementById('copy-target-list');
+
+  const activeDev = fleetDevices.find(d => d.id === activeDeviceId) || { name: 'Aktuelles Display' };
+  sourceNameEl.innerText = `"${activeDev.name}"`;
+
+  targetList.innerHTML = '';
+  const otherDevices = fleetDevices.filter(d => d.id !== activeDeviceId);
+
+  if (otherDevices.length === 0) {
+    targetList.innerHTML = '<p style="color: var(--text-secondary); font-size: 13px;">Keine weiteren Displays vorhanden. Bitte lege zuerst weitere Kioske an.</p>';
+  } else {
+    otherDevices.forEach(dev => {
+      const label = document.createElement('label');
+      label.style.display = 'flex';
+      label.style.alignItems = 'center';
+      label.style.gap = '10px';
+      label.style.padding = '8px';
+      label.style.background = 'var(--bg-tertiary)';
+      label.style.borderRadius = '6px';
+      label.style.cursor = 'pointer';
+
+      label.innerHTML = `
+        <input type="checkbox" value="${dev.id}" class="copy-target-check" checked style="width: 16px; height: 16px;">
+        <span style="font-weight: 600;">📍 ${escapeHtml(dev.name)}</span>
+        <span style="font-size: 12px; color: var(--text-secondary); margin-left: auto;">(${dev.host || 'Keine IP'})</span>
+      `;
+      targetList.appendChild(label);
+    });
+  }
+
+  modal.style.display = 'flex';
+}
+
+function closeCopyPlaylistModal() {
+  document.getElementById('copy-modal').style.display = 'none';
+}
+
+async function executeCopyPlaylist() {
+  const checkboxes = document.querySelectorAll('.copy-target-check:checked');
+  const targetIds = Array.from(checkboxes).map(c => c.value);
+
+  if (targetIds.length === 0) {
+    showToast('Bitte mindestens ein Ziel-Display auswählen', true);
+    return;
+  }
+
+  showToast('Übertrage Playlist auf Ziel-Displays...');
+  try {
+    const res = await fetch(apiUrl('/api/kiosk/copy-playlist'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source_device_id: activeDeviceId,
+        target_device_ids: targetIds
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(data.message);
+      closeCopyPlaylistModal();
+    } else {
+      showToast(`Fehler: ${data.error}`, true);
+    }
+  } catch (err) {
+    showToast(`Fehler: ${err}`, true);
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -39,6 +453,7 @@ async function testSSH() {
   const port = document.getElementById('ssh-port').value;
   const username = document.getElementById('ssh-user').value.trim();
   const password = document.getElementById('ssh-pass').value;
+  const name = document.getElementById('dev-name').value.trim();
 
   if (!host) {
     showToast('Bitte IP-Adresse eingeben', true);
@@ -50,11 +465,12 @@ async function testSSH() {
     const res = await fetch(apiUrl('/api/test-ssh'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ host, port, username, password })
+      body: JSON.stringify({ device_id: activeDeviceId, name, host, port, username, password })
     });
     const data = await res.json();
     if (data.success) {
       showToast(data.message || 'Verbindung erfolgreich!');
+      await loadFleetData();
       setTimeout(fetchStatus, 600);
     } else {
       showToast(`Fehler: ${data.error}`, true);
@@ -69,26 +485,27 @@ async function startProvisioning() {
   const port = document.getElementById('ssh-port').value;
   const username = document.getElementById('ssh-user').value.trim();
   const password = document.getElementById('ssh-pass').value;
+  const name = document.getElementById('dev-name').value.trim();
 
   if (!host || !password) {
     showToast('IP-Adresse und Passwort sind für die Installation erforderlich', true);
     return;
   }
 
-  if (!confirm(`Möchtest du die vollständige Installation auf dem Raspberry Pi (${host}) jetzt starten?`)) {
+  if (!confirm(`Möchtest du die vollständige Installation auf dem Display "${name}" (${host}) jetzt starten?`)) {
     return;
   }
 
   const termCard = document.getElementById('terminal-card');
   const term = document.getElementById('terminal-output');
   termCard.style.display = 'block';
-  term.innerText = 'Starte Provisioning...\n';
+  term.innerText = `Starte Provisioning für ${name}...\n`;
 
   try {
     const res = await fetch(apiUrl('/api/provision/start'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ host, port, username, password })
+      body: JSON.stringify({ device_id: activeDeviceId, name, host, port, username, password })
     });
     const data = await res.json();
     if (!data.success) {
@@ -96,7 +513,6 @@ async function startProvisioning() {
       return;
     }
 
-    // Connect to SSE stream
     const evtSource = new EventSource(apiUrl('/api/provision/stream'));
     evtSource.onmessage = (e) => {
       if (e.data.includes('PROVISIONING_COMPLETE')) {
@@ -121,11 +537,9 @@ async function startProvisioning() {
 // -----------------------------------------------------------------------------
 // 2. Playlist / Multi-URL Rotation
 // -----------------------------------------------------------------------------
-let playlistItems = [];
-
 async function loadPlaylist() {
   try {
-    const res = await fetch(apiUrl('/api/kiosk/playlist'));
+    const res = await fetch(apiUrl(`/api/kiosk/playlist?device_id=${activeDeviceId}`));
     if (res.ok) {
       playlistItems = await res.json();
       if (!Array.isArray(playlistItems) || playlistItems.length === 0) {
@@ -179,16 +593,16 @@ function removePlaylistItem(idx) {
 }
 
 async function savePlaylist() {
-  showToast('Speichere Playlist auf dem Kiosk...');
+  showToast('Speichere Playlist auf diesem Display...');
   try {
-    const res = await fetch(apiUrl('/api/kiosk/playlist'), {
+    const res = await fetch(apiUrl(`/api/kiosk/playlist?device_id=${activeDeviceId}`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(playlistItems)
     });
     const data = await res.json();
     if (data.success) {
-      showToast('Playlist gespeichert und Kiosk neu geladen!');
+      showToast('Playlist gespeichert und Display neu geladen!');
     } else {
       showToast(`Fehler: ${data.error}`, true);
     }
@@ -200,19 +614,17 @@ async function savePlaylist() {
 // -----------------------------------------------------------------------------
 // 3. Schulglocken-Planer & MP3
 // -----------------------------------------------------------------------------
-let bellSchedule = [];
-
 async function loadBellSchedule() {
   try {
     const res = await fetch(apiUrl('/api/bell/schedule'));
     if (res.ok) {
-      bellSchedule = await res.json();
+      const data = await res.json();
+      bellSchedule = data.schedule || data;
     }
   } catch (e) {
     bellSchedule = [];
   }
   if (!Array.isArray(bellSchedule) || bellSchedule.length === 0) {
-    // Standard Schultag-Vorlage
     bellSchedule = [
       { id: 1, time: "07:55", name: "1. Vorwarnung", days: ["mon", "tue", "wed", "thu", "fri"], volume: 100 },
       { id: 2, time: "08:00", name: "Beginn 1. Stunde", days: ["mon", "tue", "wed", "thu", "fri"], volume: 100 },
@@ -283,16 +695,16 @@ function removeScheduleRow(idx) {
 }
 
 async function saveBellSchedule() {
-  showToast('Speichere Glocken-Zeitplan...');
+  showToast('Speichere zentralen Glocken-Zeitplan und synchronisiere Flotte...');
   try {
     const res = await fetch(apiUrl('/api/bell/schedule'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(bellSchedule)
+      body: JSON.stringify({ schedule: bellSchedule })
     });
     const data = await res.json();
     if (data.success) {
-      showToast('Schulglocken-Zeitplan erfolgreich auf Kiosk aktiviert!');
+      showToast(data.message || 'Schulglocken-Zeitplan erfolgreich gespeichert!');
     } else {
       showToast(`Fehler: ${data.error}`, true);
     }
@@ -304,7 +716,7 @@ async function saveBellSchedule() {
 async function uploadBellFile(file) {
   if (!file) return;
   const statusEl = document.getElementById('bell-file-status');
-  statusEl.innerText = `Übertrage ${file.name}...`;
+  statusEl.innerText = `Übertrage ${file.name} auf alle Kioske...`;
 
   const formData = new FormData();
   formData.append('file', file);
@@ -316,7 +728,7 @@ async function uploadBellFile(file) {
     });
     const data = await res.json();
     if (data.success) {
-      showToast('MP3 Schulglocke erfolgreich übertragen!');
+      showToast('MP3 Schulglocke erfolgreich an alle Displays verteilt!');
       statusEl.innerText = `Aktiv: ${file.name} (${Math.round(file.size / 1024)} KB)`;
     } else {
       showToast(`Fehler beim Hochladen: ${data.error}`, true);
@@ -329,9 +741,9 @@ async function uploadBellFile(file) {
 }
 
 async function testPlayBell() {
-  showToast('Sende Läut-Befehl an Kiosk...');
+  showToast('Sende Läut-Befehl an gewähltes Display...');
   try {
-    const res = await fetch(apiUrl('/api/bell/play'), {
+    const res = await fetch(apiUrl(`/api/bell/play?device_id=${activeDeviceId}`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ volume: 100 })
@@ -351,9 +763,9 @@ async function testPlayBell() {
 // 4. HDMI-CEC TV Steuerung
 // -----------------------------------------------------------------------------
 async function toggleScreen(action) {
-  showToast(`Sende TV-Befehl (${action})...`);
+  showToast(`Sende TV-Befehl (${action}) an aktives Display...`);
   try {
-    const res = await fetch(apiUrl('/api/cec/screen'), {
+    const res = await fetch(apiUrl(`/api/cec/screen?device_id=${activeDeviceId}`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action })
@@ -374,7 +786,7 @@ async function saveCecSchedule() {
 
   showToast('Speichere TV-Zeiten...');
   try {
-    const res = await fetch(apiUrl('/api/cec/schedule'), {
+    const res = await fetch(apiUrl(`/api/cec/schedule?device_id=${activeDeviceId}`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ on_time, off_time })
@@ -391,47 +803,53 @@ async function saveCecSchedule() {
 async function restartKioskService() {
   showToast('Starte Kiosk-Browser neu...');
   try {
-    await fetch(apiUrl('/api/kiosk/status'));
+    await fetch(apiUrl(`/api/kiosk/status?device_id=${activeDeviceId}`));
     showToast('Befehl gesendet.');
   } catch (e) {}
 }
 
 // -----------------------------------------------------------------------------
-// 5. Live Status Polling
+// 5. Live Status Polling & Healthcheck
 // -----------------------------------------------------------------------------
 async function fetchStatus() {
   const badge = document.getElementById('pi-status-badge');
   const badgeText = document.getElementById('pi-status-text');
 
   try {
-    const res = await fetch(apiUrl('/api/kiosk/status'));
+    const res = await fetch(apiUrl(`/api/kiosk/status?device_id=${activeDeviceId}`));
     if (!res.ok) throw new Error('Offline');
     const data = await res.json();
 
     badge.className = 'badge online';
     badgeText.innerText = 'Online';
 
-    document.getElementById('stat-kiosk-service').innerText = data.kiosk_service || 'unbekannt';
-    document.getElementById('stat-screen-power').innerText = (data.screen_power || 'unbekannt').toUpperCase();
-    document.getElementById('stat-kiosk-url').innerText = data.kiosk_url || '-';
+    const sKiosk = document.getElementById('stat-kiosk-service');
+    const sPower = document.getElementById('stat-screen-power');
+    const sUrl = document.getElementById('stat-kiosk-url');
+    if (sKiosk) sKiosk.innerText = data.kiosk_service || 'aktiv';
+    if (sPower) sPower.innerText = (data.screen_power || 'unbekannt').toUpperCase();
+    if (sUrl) sUrl.innerText = data.kiosk_url || '-';
 
     if (data.bell) {
       const bellInfo = data.bell.sound_exists
         ? `Vorhanden (${Math.round((data.bell.sound_size_bytes || 0) / 1024)} KB)`
         : 'Keine MP3 vorhanden';
-      document.getElementById('stat-bell-info').innerText = bellInfo;
+      const sBell = document.getElementById('stat-bell-info');
+      if (sBell) sBell.innerText = bellInfo;
       const fileStatus = document.getElementById('bell-file-status');
       if (fileStatus) fileStatus.innerText = `Status: ${bellInfo}`;
     }
 
-    if (data.cec_on_time) document.getElementById('cec-on-time').value = data.cec_on_time;
-    if (data.cec_off_time) document.getElementById('cec-off-time').value = data.cec_off_time;
+    if (data.cec_on_time && document.getElementById('cec-on-time')) document.getElementById('cec-on-time').value = data.cec_on_time;
+    if (data.cec_off_time && document.getElementById('cec-off-time')) document.getElementById('cec-off-time').value = data.cec_off_time;
 
   } catch (e) {
     badge.className = 'badge offline';
     badgeText.innerText = 'Offline (Nicht erreichbar)';
-    document.getElementById('stat-kiosk-service').innerText = 'Offline';
-    document.getElementById('stat-screen-power').innerText = 'Offline';
+    const sKiosk = document.getElementById('stat-kiosk-service');
+    const sPower = document.getElementById('stat-screen-power');
+    if (sKiosk) sKiosk.innerText = 'Offline';
+    if (sPower) sPower.innerText = 'Offline';
   }
 }
 
@@ -447,7 +865,7 @@ async function runLiveHealthcheck() {
   out.innerText = 'Starte Tiefendiagnose auf dem Raspberry Pi... Bitte ca. 5 Sekunden warten...\n';
 
   try {
-    const res = await fetch(apiUrl('/api/pi/healthcheck/run'), { method: 'POST' });
+    const res = await fetch(apiUrl(`/api/pi/healthcheck/run?device_id=${activeDeviceId}`), { method: 'POST' });
     const data = await res.json();
     if (data.success && data.output) {
       out.innerText = data.output;
@@ -465,10 +883,13 @@ async function runLiveHealthcheck() {
   }
 }
 
-// Initialer Status-Check
-window.addEventListener('DOMContentLoaded', () => {
+// Initialer Start
+window.addEventListener('DOMContentLoaded', async () => {
+  await loadFleetData();
+  loadFleetDashboard();
   fetchStatus();
-  // Drag & drop dropzone setup
+
+  // Dropzone setup
   const dropzone = document.getElementById('bell-dropzone');
   if (dropzone) {
     ['dragenter', 'dragover'].forEach(name => {
@@ -483,3 +904,4 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+

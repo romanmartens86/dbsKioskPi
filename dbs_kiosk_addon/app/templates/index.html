@@ -10,43 +10,96 @@
   <div class="container">
     <header>
       <div class="brand">
-        <span style="font-size: 28px;">🖥️</span>
+        <span style="font-size: 32px;">🖥️</span>
         <div>
           <h1>dbsKioskPi Manager</h1>
-          <p style="font-size: 13px; color: var(--text-secondary);">Home Assistant Remote-Provisioning & Schulglocken-System</p>
+          <p style="font-size: 13px; color: var(--text-secondary);">Home Assistant Flotten-Management & Schulglocken-System</p>
         </div>
       </div>
-      <div>
-        <span id="pi-status-badge" class="badge offline">
-          <span style="width: 8px; height: 8px; border-radius: 50%; background: currentColor;"></span>
-          <span id="pi-status-text">Prüfe Status...</span>
-        </span>
+      <div class="header-controls">
+        <div class="device-switcher-box">
+          <label for="device-select" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); display: block; margin-bottom: 3px;">Aktives Display:</label>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <select id="device-select" class="select-device" onchange="onDeviceSelectChange(this.value)">
+              {% for dev in devices %}
+                <option value="{{ dev.id }}" {% if dev.id == active_device_id %}selected{% endif %}>
+                  📍 {{ dev.name }} ({{ dev.host or 'Nicht konfiguriert' }})
+                </option>
+              {% endfor %}
+            </select>
+            <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;" onclick="promptNewDevice()" title="Neues Display hinzufügen">
+              ➕ Neu
+            </button>
+          </div>
+        </div>
+        <div>
+          <span id="pi-status-badge" class="badge offline">
+            <span style="width: 8px; height: 8px; border-radius: 50%; background: currentColor;"></span>
+            <span id="pi-status-text">Prüfe Status...</span>
+          </span>
+        </div>
       </div>
     </header>
 
     <nav class="tabs">
-      <button class="tab-btn active" onclick="switchTab('setup')">🚀 Remote-Setup (SSH)</button>
+      <button class="tab-btn active" onclick="switchTab('fleet')">📊 Flotten-Übersicht</button>
       <button class="tab-btn" onclick="switchTab('kiosk')">📺 Webseiten & Rotation</button>
       <button class="tab-btn" onclick="switchTab('bell')">🔔 Schulglocken-Planer</button>
       <button class="tab-btn" onclick="switchTab('cec')">⚡ HDMI TV-Steuerung</button>
-      <button class="tab-btn" onclick="switchTab('status')">📊 Live-Status</button>
+      <button class="tab-btn" onclick="switchTab('status')">🩺 Diagnose & Logs</button>
+      <button class="tab-btn" onclick="switchTab('setup')">⚙️ Kiosk-Einrichtung (SSH)</button>
     </nav>
 
     <!-- ----------------------------------------------------------------------- -->
-    <!-- TAB 1: Remote Setup (SSH Provisioning) -->
+    <!-- TAB 0: Flotten-Übersicht (Alle Raspberry Pis auf einen Blick)           -->
     <!-- ----------------------------------------------------------------------- -->
-    <div id="tab-setup" class="tab-content active">
+    <div id="tab-fleet" class="tab-content active">
+      <div class="card" style="margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+          <div>
+            <h2 class="card-title" style="margin-bottom: 4px;">🏫 Display-Flotte im Überblick</h2>
+            <p style="color: var(--text-secondary); font-size: 14px;">Alle Kiosk-Bildschirme der Schule überwachen und zentral steuern.</p>
+          </div>
+          <div class="btn-group" style="margin-top: 0; gap: 8px;">
+            <button class="btn btn-secondary" onclick="loadFleetDashboard()">🔄 Status aktualisieren</button>
+            <button class="btn btn-success" onclick="triggerFleetAction('screen_on')">⚡ Alle TVs AN</button>
+            <button class="btn btn-danger" onclick="triggerFleetAction('screen_off')">🌙 Alle TVs STANDBY</button>
+            <button class="btn btn-secondary" onclick="triggerFleetAction('reload')">🔄 Alle neu laden</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="fleet-grid" class="fleet-grid">
+        <div style="color: var(--text-secondary); padding: 24px; text-align: center; grid-column: 1 / -1;">
+          Lade Flotten-Status...
+        </div>
+      </div>
+    </div>
+
+    <!-- ----------------------------------------------------------------------- -->
+    <!-- TAB 1: Remote Setup (SSH Provisioning & Konfiguration)                 -->
+    <!-- ----------------------------------------------------------------------- -->
+    <div id="tab-setup" class="tab-content">
       <div class="card">
-        <h2 class="card-title">🔌 1. Verbindung zum nackten Raspberry Pi</h2>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+          <h2 class="card-title" style="margin-bottom: 0;">🔌 1. Verbindung zum Raspberry Pi</h2>
+          <button class="btn btn-danger" style="font-size: 12px; padding: 4px 10px;" onclick="deleteCurrentDevice()" id="btn-delete-device">
+            🗑️ Dieses Gerät löschen
+          </button>
+        </div>
         <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">
-          Gib die IP-Adresse und Zugangsdaten deines frisch installierten Raspberry Pi OS Lite (64-Bit) an.
+          Gib den Namen des Raums (z. B. <i>Lehrerzimmer</i>, <i>Flur Oben</i>) sowie die IP-Adresse und Zugangsdaten deines Raspberry Pi OS Lite (64-Bit) an.
           Das Add-on installiert alle Kiosk- und Audio-Komponenten vollautomatisch per SSH.
         </p>
 
         <div class="form-grid">
+          <div class="form-group" style="grid-column: 1 / -1;">
+            <label for="dev-name">Name / Standort des Kiosks (Klartext)</label>
+            <input type="text" id="dev-name" placeholder="z. B. Lehrerzimmer, Flur Oben, Foyer, Mensa" value="{{ settings.name or 'Kiosk 1' }}">
+          </div>
           <div class="form-group">
             <label for="ssh-host">IP-Adresse / Hostname</label>
-            <input type="text" id="ssh-host" placeholder="z. B. 192.168.1.120" value="{{ settings.host }}">
+            <input type="text" id="ssh-host" placeholder="z. B. 192.168.178.131" value="{{ settings.host }}">
           </div>
           <div class="form-group">
             <label for="ssh-port">SSH-Port</label>
@@ -54,7 +107,7 @@
           </div>
           <div class="form-group">
             <label for="ssh-user">Benutzername</label>
-            <input type="text" id="ssh-user" placeholder="pi" value="{{ settings.username or 'pi' }}">
+            <input type="text" id="ssh-user" placeholder="dbsadmin" value="{{ settings.username or 'dbsadmin' }}">
           </div>
           <div class="form-group">
             <label for="ssh-pass">Passwort</label>
@@ -63,12 +116,13 @@
         </div>
 
         <div class="btn-group">
+          <button class="btn btn-secondary" onclick="saveDeviceSettings()">💾 Einstellungen speichern</button>
           <button class="btn btn-secondary" onclick="testSSH()">🔍 Verbindung testen</button>
           <button class="btn btn-success" onclick="startProvisioning()">🚀 KioskPi vollautomatisch installieren</button>
         </div>
       </div>
 
-      <div class="card" id="terminal-card" style="display: none;">
+      <div class="card" id="terminal-card" style="display: none; margin-top: 16px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
           <h2 class="card-title" style="margin-bottom: 0;">📜 Installationsprotokoll (Echtzeit-Ausgabe)</h2>
           <div class="btn-group" style="margin-top: 0;">
@@ -89,17 +143,25 @@
     <!-- ----------------------------------------------------------------------- -->
     <div id="tab-kiosk" class="tab-content">
       <div class="card">
-        <h2 class="card-title">📺 Kiosk-Webseiten & Diashow-Rotation</h2>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+          <h2 class="card-title" style="margin-bottom: 0;">📺 Kiosk-Webseiten & Diashow-Rotation</h2>
+          <span id="active-device-indicator" style="font-size: 13px; color: var(--accent); font-weight: 600;">Display: Kiosk 1</span>
+        </div>
         <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">
-          Lege fest, welche Webseiten auf dem Bildschirm angezeigt werden sollen. Wenn du mehrere Seiten einträgst,
+          Lege fest, welche Webseiten auf dem aktuell ausgewählten Display angezeigt werden sollen. Wenn du mehrere Seiten einträgst,
           wechselt der Kiosk automatisch nach der gewünschten Zeit zur nächsten Seite (nahtlos ohne Bildschirmflackern).
         </p>
 
         <div id="playlist-container"></div>
 
-        <div class="btn-group" style="margin-top: 16px;">
-          <button class="btn btn-secondary" onclick="addPlaylistItem()">➕ Seite hinzufügen</button>
-          <button class="btn" onclick="savePlaylist()">💾 Playlist auf Kiosk speichern</button>
+        <div class="btn-group" style="margin-top: 16px; display: flex; justify-content: space-between; flex-wrap: wrap;">
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-secondary" onclick="addPlaylistItem()">➕ Seite hinzufügen</button>
+            <button class="btn" onclick="savePlaylist()">💾 Playlist auf Display speichern</button>
+          </div>
+          <button class="btn btn-secondary" onclick="openCopyPlaylistModal()" style="border-color: var(--accent); color: var(--accent);">
+            📋 Diese Playlist auf andere Displays übertragen...
+          </button>
         </div>
       </div>
     </div>
@@ -108,25 +170,39 @@
     <!-- TAB 3: Schulglocken-Planer & MP3 -->
     <!-- ----------------------------------------------------------------------- -->
     <div id="tab-bell" class="tab-content">
+      <div class="card" style="margin-bottom: 16px;">
+        <h2 class="card-title">🔔 Glocken-Einstellungen für dieses Display</h2>
+        <div style="display: flex; align-items: center; gap: 20px; flex-wrap: wrap; padding: 8px 0;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 15px; font-weight: 600;">
+            <input type="checkbox" id="bell-enabled-check" onchange="updateDeviceBellSettings()" style="width: 18px; height: 18px;">
+            Schulgong auf diesem Display abspielen
+          </label>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <label for="bell-volume-slider" style="font-size: 13px; color: var(--text-secondary);">Lautstärke:</label>
+            <input type="range" id="bell-volume-slider" min="10" max="100" value="80" onchange="updateDeviceBellSettings()" style="width: 120px;">
+            <span id="bell-volume-val" style="font-size: 13px; font-weight: 600;">80%</span>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <h2 class="card-title">🎵 Schulglocken-Sound (MP3)</h2>
         <div class="dropzone" id="bell-dropzone" onclick="document.getElementById('bell-file-input').click()">
           <span style="font-size: 32px;">📁</span>
           <p style="font-weight: 600; margin-top: 8px;">Klicke hier oder ziehe eine MP3-Datei hinein</p>
-          <p style="font-size: 12px; color: var(--text-secondary);">Unterstützt Standard MP3-Dateien (z. B. Schulgong, Pausensound, Melodie)</p>
+          <p style="font-size: 12px; color: var(--text-secondary);">Wird automatisch auf alle erreichbaren Displays der Flotte synchronisiert</p>
           <input type="file" id="bell-file-input" accept="audio/mpeg,audio/mp3" style="display: none;" onchange="uploadBellFile(this.files[0])">
         </div>
         <div style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
           <span id="bell-file-status" style="font-size: 14px; color: var(--text-secondary);">Lade Status...</span>
-          <button class="btn btn-secondary" onclick="testPlayBell()">🔔 Test: Glocke jetzt abspielen</button>
+          <button class="btn btn-secondary" onclick="testPlayBell()">🔔 Test: Glocke auf diesem Display abspielen</button>
         </div>
       </div>
 
       <div class="card">
-        <h2 class="card-title">⏰ Stundenplaner (Automatische Gong-Zeiten)</h2>
+        <h2 class="card-title">⏰ Zentraler Stundenplaner (Automatische Gong-Zeiten)</h2>
         <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">
-          Konfiguriere, wann die Glocke an Schultagen automatisch ertönen soll. Der Raspberry Pi führt den Zeitplan
-          auch bei Netzwerkausfällen vollkommen autark und zuverlässig aus.
+          Konfiguriere zentral die Pausenzeiten für die gesamte Schule. Der Zeitplan wird automatisch an alle aktivierten Kiosk-Geräte übertragen und läuft dort autark weiter.
         </p>
 
         <div class="table-responsive">
@@ -254,6 +330,23 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- Modal: Playlist auf andere Displays kopieren -->
+  <div id="copy-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <h2 style="font-size: 18px; margin-bottom: 8px;">📋 Playlist auf andere Displays übertragen</h2>
+      <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+        Wähle die Ziel-Kioske aus, welche die aktuelle Playlist von <b id="copy-source-name">diesem Display</b> übernehmen sollen:
+      </p>
+      <div id="copy-target-list" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px;">
+        <!-- Checkbox items injected dynamically -->
+      </div>
+      <div class="btn-group" style="justify-content: flex-end; margin-top: 0;">
+        <button class="btn btn-secondary" onclick="closeCopyPlaylistModal()">Abbrechen</button>
+        <button class="btn btn-success" onclick="executeCopyPlaylist()">🚀 Jetzt übertragen</button>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="notification">Hinweis</div>

@@ -29,6 +29,7 @@ SOUNDS_DIR = "/var/lib/dbskiosk/sounds"
 BELL_PATH = os.path.join(SOUNDS_DIR, "bell.mp3")
 INSTALL_LOG_FILE = "/var/log/dbskiosk-install.log"
 CONFIG_LOG_FILE = "/var/log/dbskiosk-config.log"
+HEALTHCHECK_LOG_FILE = "/var/log/dbskiosk-healthcheck.log"
 
 
 def log_config_event(action):
@@ -265,6 +266,27 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Konfigurationslog /var/log/dbskiosk-config.log nicht vorhanden"}, status=404)
                 return
 
+        if path in ("/api/healthcheck", "/api/logs/healthcheck"):
+            if not os.path.exists(HEALTHCHECK_LOG_FILE):
+                if os.path.exists("/usr/local/bin/dbs-healthcheck"):
+                    subprocess.run(["/usr/local/bin/dbs-healthcheck"], capture_output=True)
+            if os.path.exists(HEALTHCHECK_LOG_FILE):
+                try:
+                    with open(HEALTHCHECK_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Disposition", 'inline; filename="dbskiosk-healthcheck.txt"')
+                    self.end_headers()
+                    self.wfile.write(data.encode("utf-8"))
+                    return
+                except Exception as e:
+                    self._send_json({"error": str(e)}, status=500)
+                    return
+            else:
+                self._send_json({"error": "Healthcheck-Log nicht vorhanden"}, status=404)
+                return
+
         if path == "/api/bell/schedule":
             if os.path.exists(SCHEDULE_FILE):
                 try:
@@ -399,6 +421,17 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                     subprocess.run(["systemctl", "restart", "kiosk-cec-off.timer"], check=False)
 
             self._send_json({"success": True, "on_time": on_time, "off_time": off_time})
+            return
+
+        # ----------------------------------------------------------------------
+        # Healthcheck: Run diagnostics now
+        # ----------------------------------------------------------------------
+        elif path == "/api/healthcheck/run":
+            try:
+                res = subprocess.run(["/usr/local/bin/dbs-healthcheck"], capture_output=True, text=True, timeout=20)
+                self._send_json({"success": True, "output": res.stdout})
+            except Exception as e:
+                self._send_json({"success": False, "error": str(e)}, 500)
             return
 
         # ----------------------------------------------------------------------

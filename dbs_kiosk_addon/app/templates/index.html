@@ -215,6 +215,27 @@
       </div>
 
       <div class="card" style="margin-top: 16px;">
+        <h2 class="card-title">🩺 Raspberry Pi Post-Install Healthcheck & Diagnose</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">
+          Führt eine tiefe Systemanalyse durch (CPU-Temperatur, Throttling/Spannung, RAM & zRAM, Chromium-Kiosk, Cage Wayland, HDMI-CEC Verbindung und Netzwerk). Der Bericht wird nach jedem Booten automatisch in <code>/var/log/dbskiosk-healthcheck.log</code> aktualisiert.
+        </p>
+        <div class="btn-group" style="margin-bottom: 12px; flex-wrap: wrap;">
+          <button class="btn btn-success" onclick="runLiveHealthcheck()" id="btn-run-healthcheck" style="display: inline-flex; align-items: center; gap: 6px;">
+            🔍 Healthcheck jetzt live ausführen
+          </button>
+          <a href="{{ ingress_path }}/api/pi/healthcheck" target="_blank" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+            👁️ Diagnose-Bericht ansehen
+          </a>
+          <a href="{{ ingress_path }}/api/pi/healthcheck" download="dbskiosk-healthcheck.txt" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+            📥 Bericht herunterladen (.txt)
+          </a>
+        </div>
+        <div id="healthcheck-result-box" style="display: none; margin-top: 14px;">
+          <div class="terminal" id="healthcheck-output" style="max-height: 280px; overflow-y: auto;">Warte auf Diagnose...</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 16px;">
         <h2 class="card-title">📜 System- & Installationsprotokolle</h2>
         <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">
           Lade die Logdateien herunter, um im Detail zu analysieren, welche Installationsschritte erfolgreich waren und wo es eventuell Probleme gab.

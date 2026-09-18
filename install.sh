@@ -210,6 +210,12 @@ chmod 755 /usr/local/bin/dbs-bell
 log_info "Installiere REST-API Daemon (/usr/local/bin/dbs-api)..."
 cp "$SCRIPT_DIR/files/dbs-api.py" /usr/local/bin/dbs-api
 chmod 755 /usr/local/bin/dbs-api
+python3 -m py_compile /usr/local/bin/dbs-api 2>/dev/null || true
+
+# System Healthcheck & Diagnosetool installieren
+log_info "Installiere Healthcheck-Diagnosetool (/usr/local/bin/dbs-healthcheck)..."
+cp "$SCRIPT_DIR/files/dbs-healthcheck.sh" /usr/local/bin/dbs-healthcheck
+chmod 755 /usr/local/bin/dbs-healthcheck
 
 # Interaktives CLI-Tool installieren
 log_info "Installiere CLI-Konfigurationstool (/usr/local/bin/dbs-config)..."
@@ -238,6 +244,12 @@ chmod 644 /etc/systemd/system/kiosk-cec*
 cp "$SCRIPT_DIR/files/dbs-api.service" /etc/systemd/system/
 chmod 644 /etc/systemd/system/dbs-api.service
 
+# Post-Boot Healthcheck Service kopieren
+if [ -f "$SCRIPT_DIR/files/kiosk-healthcheck.service" ]; then
+    cp "$SCRIPT_DIR/files/kiosk-healthcheck.service" /etc/systemd/system/
+    chmod 644 /etc/systemd/system/kiosk-healthcheck.service
+fi
+
 systemctl daemon-reload
 
 # Boot-Target auf graphical.target setzen
@@ -245,11 +257,18 @@ log_info "Setze Boot-Target auf graphical.target..."
 systemctl set-default graphical.target
 
 # Dienste und Timer aktivieren
-log_info "Aktiviere Kiosk-Dienst, CEC-Timer und API-Dienst..."
+log_info "Aktiviere Kiosk-Dienst, CEC-Timer, API-Dienst und Healthcheck..."
 systemctl enable kiosk.service
 systemctl enable --now kiosk-cec-on.timer
 systemctl enable --now kiosk-cec-off.timer
 systemctl enable --now dbs-api.service
+if [ -f "/etc/systemd/system/kiosk-healthcheck.service" ]; then
+    systemctl enable kiosk-healthcheck.service
+fi
+
+# Ersten Initial-Healthcheck ausführen
+log_info "Führe initialen System-Healthcheck durch..."
+/usr/local/bin/dbs-healthcheck >/dev/null 2>&1 || true
 
 # ------------------------------------------------------------------------------
 # 7. Abschluss & Zusammenfassung

@@ -1,0 +1,13 @@
+[Unit]
+Description=dbsKioskPi Post-Boot Healthcheck and Diagnostic Report
+After=kiosk.service dbs-api.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 8
+ExecStart=/usr/local/bin/dbs-healthcheck
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

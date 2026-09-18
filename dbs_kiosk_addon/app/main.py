@@ -353,6 +353,96 @@ def download_pi_config_log():
     return jsonify({"error": "Konfigurationslog nicht verfügbar"}), 404
 
 
+@app.route("/api/pi/healthcheck")
+def download_pi_healthcheck():
+    """Download or view the system healthcheck diagnostic report."""
+    settings = load_settings()
+    host = settings.get("host")
+    port = int(settings.get("port", 22))
+    username = settings.get("username", "pi")
+    password = settings.get("password", "")
+    api_port = int(settings.get("api_port", 8088))
+
+    if not host:
+        return jsonify({"error": "Keine IP-Adresse konfiguriert"}), 400
+
+    # 1. Versuche über REST-API
+    try:
+        url = f"http://{host}:{api_port}/api/healthcheck"
+        resp = requests.get(url, auth=(username, password), timeout=6)
+        if resp.status_code == 200 and resp.content:
+            return Response(
+                resp.content,
+                mimetype="text/plain; charset=utf-8",
+                headers={"Content-Disposition": "inline; filename=dbskiosk-healthcheck.txt"}
+            )
+    except Exception:
+        pass
+
+    # 2. Versuche über SSH
+    if password:
+        try:
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(hostname=host, port=port, username=username, password=password, timeout=6)
+            sftp = client.open_sftp()
+            try:
+                with sftp.open("/var/log/dbskiosk-healthcheck.log", "r") as f:
+                    content = f.read()
+            except Exception:
+                stdin, stdout, stderr = client.exec_command("sudo /usr/local/bin/dbs-healthcheck")
+                content = stdout.read()
+            sftp.close()
+            client.close()
+            return Response(
+                content,
+                mimetype="text/plain; charset=utf-8",
+                headers={"Content-Disposition": "inline; filename=dbskiosk-healthcheck.txt"}
+            )
+        except Exception as e:
+            return jsonify({"error": f"Healthcheck nicht erreichbar: {e}"}), 500
+
+    return jsonify({"error": "Healthcheck nicht verfügbar"}), 404
+
+
+@app.route("/api/pi/healthcheck/run", methods=["POST"])
+def run_pi_healthcheck():
+    """Trigger a fresh live healthcheck run on the Raspberry Pi."""
+    settings = load_settings()
+    host = settings.get("host")
+    port = int(settings.get("port", 22))
+    username = settings.get("username", "pi")
+    password = settings.get("password", "")
+    api_port = int(settings.get("api_port", 8088))
+
+    if not host:
+        return jsonify({"error": "Keine IP-Adresse konfiguriert"}), 400
+
+    try:
+        url = f"http://{host}:{api_port}/api/healthcheck/run"
+        resp = requests.post(url, auth=(username, password), timeout=25)
+        if resp.status_code == 200:
+            return Response(resp.content, status=200, content_type="application/json")
+    except Exception:
+        pass
+
+    if password:
+        try:
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(hostname=host, port=port, username=username, password=password, timeout=8)
+            stdin, stdout, stderr = client.exec_command("sudo /usr/local/bin/dbs-healthcheck")
+            output = stdout.read().decode("utf-8", errors="replace")
+            client.close()
+            return jsonify({"success": True, "output": output})
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    return jsonify({"success": False, "error": "Keine Verbindung zum Pi"}), 500
+
+
 @app.route("/api/provision/stream")
 def provision_stream():
     """SSE Stream providing real-time installation logs."""

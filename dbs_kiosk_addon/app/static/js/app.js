@@ -435,6 +435,36 @@ async function fetchStatus() {
   }
 }
 
+async function runLiveHealthcheck() {
+  const btn = document.getElementById('btn-run-healthcheck');
+  const box = document.getElementById('healthcheck-result-box');
+  const out = document.getElementById('healthcheck-output');
+
+  btn.disabled = true;
+  btn.innerText = '⏳ Führe Diagnose durch...';
+  showToast('Führe System-Healthcheck auf Raspberry Pi aus...');
+  box.style.display = 'block';
+  out.innerText = 'Starte Tiefendiagnose auf dem Raspberry Pi... Bitte ca. 5 Sekunden warten...\n';
+
+  try {
+    const res = await fetch(apiUrl('/api/pi/healthcheck/run'), { method: 'POST' });
+    const data = await res.json();
+    if (data.success && data.output) {
+      out.innerText = data.output;
+      showToast('Healthcheck erfolgreich abgeschlossen!');
+    } else {
+      out.innerText = 'Fehler: ' + (data.error || 'Unbekannter Fehler');
+      showToast('Healthcheck fehlgeschlagen: ' + (data.error || ''), true);
+    }
+  } catch (err) {
+    out.innerText = 'Verbindungsfehler: ' + err;
+    showToast('Verbindungsfehler: ' + err, true);
+  } finally {
+    btn.disabled = false;
+    btn.innerText = '🔍 Healthcheck jetzt live ausführen';
+  }
+}
+
 // Initialer Status-Check
 window.addEventListener('DOMContentLoaded', () => {
   fetchStatus();

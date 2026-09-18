@@ -207,7 +207,7 @@ def download_provision_log():
             return Response(
                 content,
                 mimetype="text/plain; charset=utf-8",
-                headers={"Content-Disposition": "attachment; filename=dbskiosk-install.log"}
+                headers={"Content-Disposition": "inline; filename=dbskiosk-install.txt"}
             )
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -235,7 +235,7 @@ def download_pi_install_log():
             return Response(
                 resp.content,
                 mimetype="text/plain; charset=utf-8",
-                headers={"Content-Disposition": "attachment; filename=dbskiosk-install.log"}
+                headers={"Content-Disposition": "inline; filename=dbskiosk-install.txt"}
             )
     except Exception:
         pass
@@ -255,7 +255,7 @@ def download_pi_install_log():
             return Response(
                 content,
                 mimetype="text/plain; charset=utf-8",
-                headers={"Content-Disposition": "attachment; filename=dbskiosk-install.log"}
+                headers={"Content-Disposition": "inline; filename=dbskiosk-install.txt"}
             )
         except Exception:
             pass
@@ -268,7 +268,7 @@ def download_pi_install_log():
             return Response(
                 content,
                 mimetype="text/plain; charset=utf-8",
-                headers={"Content-Disposition": "attachment; filename=dbskiosk-install.log"}
+                headers={"Content-Disposition": "inline; filename=dbskiosk-install.txt"}
             )
         except Exception:
             pass

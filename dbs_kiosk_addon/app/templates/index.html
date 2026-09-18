@@ -71,9 +71,14 @@
       <div class="card" id="terminal-card" style="display: none;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
           <h2 class="card-title" style="margin-bottom: 0;">📜 Installationsprotokoll (Echtzeit-Ausgabe)</h2>
-          <a id="btn-download-log" href="{{ ingress_path }}/api/provision/download-log" download="dbskiosk-install.log" class="btn btn-secondary" style="font-size: 13px; text-decoration: none; padding: 6px 14px; display: inline-flex; align-items: center; gap: 6px;">
-            📥 Logdatei herunterladen
-          </a>
+          <div class="btn-group" style="margin-top: 0;">
+            <a id="btn-view-log" href="{{ ingress_path }}/api/provision/download-log" target="_blank" class="btn btn-secondary" style="font-size: 13px; text-decoration: none; padding: 6px 14px; display: inline-flex; align-items: center; gap: 6px;">
+              👁️ Im Browser ansehen
+            </a>
+            <a id="btn-download-log" href="{{ ingress_path }}/api/provision/download-log" download="dbskiosk-install.txt" class="btn btn-secondary" style="font-size: 13px; text-decoration: none; padding: 6px 14px; display: inline-flex; align-items: center; gap: 6px;">
+              📥 Als Datei herunterladen
+            </a>
+          </div>
         </div>
         <div class="terminal" id="terminal-output">Warte auf Start...</div>
       </div>
@@ -215,11 +220,14 @@
           Lade die Logdateien herunter, um im Detail zu analysieren, welche Installationsschritte erfolgreich waren und wo es eventuell Probleme gab.
         </p>
         <div class="btn-group">
-          <a href="{{ ingress_path }}/api/pi/download-install-log" download="dbskiosk-install.log" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
-            📥 Installations-Log (/var/log/dbskiosk-install.log)
+          <a href="{{ ingress_path }}/api/pi/download-install-log" target="_blank" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+            👁️ Installations-Log ansehen
           </a>
-          <a href="{{ ingress_path }}/api/pi/download-config-log" download="dbskiosk-config.log" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
-            📥 Konfigurations-Log (/var/log/dbskiosk-config.log)
+          <a href="{{ ingress_path }}/api/pi/download-install-log" download="dbskiosk-install.txt" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+            📥 Installations-Log herunterladen
+          </a>
+          <a href="{{ ingress_path }}/api/pi/download-config-log" target="_blank" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+            👁️ Konfigurations-Log ansehen
           </a>
         </div>
       </div>

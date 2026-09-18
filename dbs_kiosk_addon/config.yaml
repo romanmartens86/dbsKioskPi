@@ -1,5 +1,5 @@
 name: "dbsKioskPi Manager"
-version: "1.2.2"
+version: "1.2.3"
 slug: "dbs_kiosk_addon"
 description: "Zero-Touch Remote-Provisioning, Webseiten-Rotation, Schulglocken-Planer und HDMI-TV Steuerung für dbsKioskPi"
 url: "https://github.com/romanmartens86/dbsKioskPi"

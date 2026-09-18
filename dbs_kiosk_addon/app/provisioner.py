@@ -9,7 +9,6 @@ import sys
 import time
 import socket
 import paramiko
-from scp import SCPClient
 
 
 class SSHProvisioner:

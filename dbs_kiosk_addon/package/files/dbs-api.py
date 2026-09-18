@@ -16,8 +16,12 @@ import time
 import ctypes
 import ctypes.util
 from datetime import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+
+# Global cache for CEC power state to prevent blocking HTTP requests
+CACHED_CEC_POWER = "unknown"
+LAST_CEC_CHECK = 0
 
 PORT = 8088
 CONFIG_FILE = "/etc/dbskiosk/kiosk.conf"
@@ -309,17 +313,25 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-            # CEC power status query
-            cec_power = "unknown"
-            try:
-                res = subprocess.run(["/usr/local/bin/dbs-cec", "status"], capture_output=True, text=True, timeout=5)
-                out = res.stdout.lower()
-                if "on" in out or "power status: on" in out:
-                    cec_power = "on"
-                elif "standby" in out or "power status: standby" in out:
-                    cec_power = "standby"
-            except Exception:
-                pass
+            # Non-blocking CEC power status query with background refresh
+            global CACHED_CEC_POWER, LAST_CEC_CHECK
+            now = time.time()
+            if now - LAST_CEC_CHECK > 30:
+                LAST_CEC_CHECK = now
+                def refresh_cec():
+                    global CACHED_CEC_POWER
+                    try:
+                        res = subprocess.run(["/usr/local/bin/dbs-cec", "status"], capture_output=True, text=True, timeout=8)
+                        out = res.stdout.lower()
+                        if "on" in out or "power status: on" in out:
+                            CACHED_CEC_POWER = "on"
+                        elif "standby" in out or "power status: standby" in out:
+                            CACHED_CEC_POWER = "standby"
+                    except Exception:
+                        pass
+                threading.Thread(target=refresh_cec, daemon=True).start()
+
+            cec_power = CACHED_CEC_POWER
 
             data = {
                 "service": "dbsKioskPi",
@@ -600,7 +612,7 @@ def run_server():
     scheduler_thread.start()
 
     server_address = ("", PORT)
-    httpd = HTTPServer(server_address, KioskAPIHandler)
+    httpd = ThreadingHTTPServer(server_address, KioskAPIHandler)
     print(f"[INFO] dbsKioskPi REST API running on port {PORT}...")
     try:
         httpd.serve_forever()

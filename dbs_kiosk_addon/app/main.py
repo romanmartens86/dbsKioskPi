@@ -163,7 +163,7 @@ def index():
 def handle_devices():
     fleet = load_fleet_data()
     if request.method == "POST":
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         dev_id = data.get("id", "").strip()
         name = data.get("name", "").strip() or "Neuer Kiosk"
         host = data.get("host", "").strip()
@@ -222,7 +222,7 @@ def handle_devices():
 
 @app.route("/api/devices/select", methods=["POST"])
 def select_device():
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     dev_id = data.get("id")
     fleet = load_fleet_data()
     found = any(d.get("id") == dev_id for d in fleet.get("devices", []))
@@ -236,7 +236,7 @@ def select_device():
 
 @app.route("/api/devices/delete", methods=["POST"])
 def delete_device():
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     dev_id = data.get("id")
     fleet = load_fleet_data()
     devices = fleet.get("devices", [])
@@ -309,10 +309,53 @@ def fleet_status():
     return jsonify({"devices": ordered, "active_device_id": fleet.get("active_device_id")})
 
 
+def trigger_device_power_action(device, action="shutdown"):
+    """
+    Triggers shutdown or reboot on a device.
+    First tries REST-API endpoint (/api/system/shutdown or /api/system/reboot).
+    Falls back to SSH (sudo poweroff / sudo reboot) if API is unreachable or returns error.
+    """
+    host = device.get("host")
+    if not host:
+        return {"success": False, "error": "Keine IP-Adresse hinterlegt"}
+
+    action_label = "Herunterfahren" if action == "shutdown" else "Neustarten"
+    api_endpoint = "/api/system/shutdown" if action == "shutdown" else "/api/system/reboot"
+    ssh_cmd = "sudo systemctl poweroff || sudo poweroff || sudo shutdown -h now" if action == "shutdown" else "sudo systemctl reboot || sudo reboot"
+
+    # 1. Try REST API
+    try:
+        base_url = get_pi_api_base(device)
+        resp = requests.post(f"{base_url}{api_endpoint}", auth=get_pi_auth(device), timeout=4)
+        if resp.status_code == 200:
+            return {"success": True, "method": "api", "message": f"Gerät '{device.get('name')}' wird per API heruntergefahren." if action == "shutdown" else f"Gerät '{device.get('name')}' wird per API neu gestartet."}
+    except Exception:
+        pass
+
+    # 2. Try SSH fallback
+    password = device.get("password")
+    if password:
+        try:
+            import paramiko
+            port = int(device.get("port", 22))
+            username = device.get("username", "dbsadmin")
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(hostname=host, port=port, username=username, password=password, timeout=6)
+            # Execute command in background so SSH disconnects cleanly
+            client.exec_command(f"nohup sh -c 'sleep 1; {ssh_cmd}' >/dev/null 2>&1 &")
+            client.close()
+            return {"success": True, "method": "ssh", "message": f"Gerät '{device.get('name')}' wird per SSH {action_label.lower()}."}
+        except Exception as e:
+            return {"success": False, "error": f"SSH Fehler: {e}"}
+
+    return {"success": False, "error": f"Gerät '{device.get('name')}' konnte weder per API noch per SSH erreicht werden"}
+
+
 @app.route("/api/fleet/action", methods=["POST"])
 def fleet_action():
-    """Execute action across all devices (screen_on, screen_off, reload)."""
-    data = request.json or {}
+    """Execute action across all devices (screen_on, screen_off, reload, shutdown, reboot)."""
+    data = request.get_json(silent=True) or {}
     action = data.get("action")
     target_ids = data.get("device_ids")
 
@@ -331,6 +374,12 @@ def fleet_action():
                 requests.post(f"{base_url}/api/screen", json={"state": "off"}, auth=auth, timeout=4)
             elif action == "reload":
                 requests.post(f"{base_url}/api/kiosk/reload", json={}, auth=auth, timeout=4)
+            elif action == "restart_kiosk":
+                requests.post(f"{base_url}/api/kiosk/restart", json={}, auth=auth, timeout=4)
+            elif action == "shutdown":
+                trigger_device_power_action(dev, "shutdown")
+            elif action == "reboot":
+                trigger_device_power_action(dev, "reboot")
         except Exception:
             pass
 
@@ -340,10 +389,11 @@ def fleet_action():
     return jsonify({"success": True, "message": f"Aktion '{action}' an {len(devices)} Displays gesendet"})
 
 
+
 @app.route("/api/kiosk/copy-playlist", methods=["POST"])
 def copy_playlist():
     """Copy playlist from source device to target devices."""
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     source_id = data.get("source_device_id")
     target_ids = data.get("target_device_ids", [])
 
@@ -392,7 +442,7 @@ def handle_settings():
     fleet = load_fleet_data()
     dev = get_active_device(fleet)
     if request.method == "POST":
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         if data.get("name"):
             dev["name"] = data.get("name").strip()
         dev["host"] = data.get("host", "").strip()
@@ -416,7 +466,7 @@ def handle_settings():
 # ------------------------------------------------------------------------------
 @app.route("/api/test-ssh", methods=["POST"])
 def test_ssh():
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     fleet = load_fleet_data()
     dev_id = data.get("device_id")
     device = get_active_device(fleet, dev_id)
@@ -458,7 +508,15 @@ def test_ssh():
                     sftp = client.open_sftp()
                     sftp.put(pkg_api, "/tmp/dbs-api.py")
                     sftp.close()
-                    client.exec_command("sudo cp /tmp/dbs-api.py /usr/local/bin/dbs-api && sudo chmod 755 /usr/local/bin/dbs-api && sudo systemctl restart dbs-api.service")
+                    client.exec_command(f"echo '{password}' | sudo -S cp /tmp/dbs-api.py /usr/local/bin/dbs-api && echo '{password}' | sudo -S chmod 755 /usr/local/bin/dbs-api && echo '{password}' | sudo -S systemctl restart dbs-api.service")
+                pkg_hc = os.path.join(os.path.dirname(__file__), "..", "package", "files", "dbs-healthcheck.sh")
+                if not os.path.exists(pkg_hc):
+                    pkg_hc = "/app/package/files/dbs-healthcheck.sh"
+                if os.path.exists(pkg_hc):
+                    sftp = client.open_sftp()
+                    sftp.put(pkg_hc, "/tmp/dbs-healthcheck.sh")
+                    sftp.close()
+                    client.exec_command(f"echo '{password}' | sudo -S cp /tmp/dbs-healthcheck.sh /usr/local/bin/dbs-healthcheck && echo '{password}' | sudo -S chmod 755 /usr/local/bin/dbs-healthcheck")
             client.close()
         except Exception:
             pass
@@ -472,7 +530,7 @@ def start_provisioning():
     if is_provisioning:
         return jsonify({"success": False, "error": "Eine Installation läuft bereits!"}), 400
 
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     fleet = load_fleet_data()
     dev_id = data.get("device_id")
     device = get_active_device(fleet, dev_id)
@@ -705,32 +763,51 @@ def download_pi_healthcheck():
             import paramiko
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(hostname=host, port=port, username=username, password=password, timeout=6)
+            client.connect(hostname=host, port=port, username=username, password=password, timeout=8)
+            content = None
+
             sftp = client.open_sftp()
             try:
                 with sftp.open("/var/log/dbskiosk-healthcheck.log", "r") as f:
                     content = f.read()
             except Exception:
-                stdin, stdout, stderr = client.exec_command("sudo /usr/local/bin/dbs-healthcheck")
-                content = stdout.read()
+                pass
             sftp.close()
+
+            if not content:
+                # Prüfe und installiere ggf. dbs-healthcheck
+                stdin, stdout, stderr = client.exec_command("[ -x /usr/local/bin/dbs-healthcheck ] && echo 'exists'")
+                if stdout.read().decode().strip() != "exists":
+                    pkg_hc = os.path.join(os.path.dirname(__file__), "..", "package", "files", "dbs-healthcheck.sh")
+                    if not os.path.exists(pkg_hc):
+                        pkg_hc = "/app/package/files/dbs-healthcheck.sh"
+                    if os.path.exists(pkg_hc):
+                        sftp = client.open_sftp()
+                        sftp.put(pkg_hc, "/tmp/dbs-healthcheck.sh")
+                        sftp.close()
+                        client.exec_command(f"echo '{password}' | sudo -S cp /tmp/dbs-healthcheck.sh /usr/local/bin/dbs-healthcheck && echo '{password}' | sudo -S chmod 755 /usr/local/bin/dbs-healthcheck")
+
+                stdin, stdout, stderr = client.exec_command(f"echo '{password}' | sudo -S /usr/local/bin/dbs-healthcheck", timeout=25)
+                content = stdout.read()
+
             client.close()
-            return Response(
-                content,
-                mimetype="text/plain; charset=utf-8",
-                headers={"Content-Disposition": f"inline; filename=dbskiosk-healthcheck-{device.get('id')}.txt"}
-            )
+            if content:
+                return Response(
+                    content,
+                    mimetype="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": f"inline; filename=dbskiosk-healthcheck-{device.get('id')}.txt"}
+                )
         except Exception as e:
             return jsonify({"error": f"Healthcheck nicht erreichbar: {e}"}), 500
 
-    return jsonify({"error": "Healthcheck nicht verfügbar"}), 404
+    return jsonify({"error": "Healthcheck-Bericht nicht verfügbar"}), 404
 
 
-@app.route("/api/pi/healthcheck/run", methods=["POST"])
+@app.route("/api/pi/healthcheck/run", methods=["POST", "GET"])
 def run_pi_healthcheck():
     """Trigger a fresh live healthcheck run on the target Raspberry Pi."""
     fleet = load_fleet_data()
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     dev_id = data.get("device_id") or request.args.get("device_id")
     device = get_active_device(fleet, dev_id)
 
@@ -741,30 +818,66 @@ def run_pi_healthcheck():
     api_port = int(device.get("api_port", 8088))
 
     if not host:
-        return jsonify({"error": "Keine IP-Adresse konfiguriert"}), 400
+        return jsonify({"success": False, "error": "Keine IP-Adresse konfiguriert"}), 400
 
+    # 1. Versuche über REST-API
     try:
         url = f"http://{host}:{api_port}/api/healthcheck/run"
         resp = requests.post(url, auth=(username, password), timeout=25)
         if resp.status_code == 200:
-            return Response(resp.content, status=200, content_type="application/json")
+            api_data = resp.json()
+            if api_data.get("success") and api_data.get("output"):
+                return jsonify(api_data)
     except Exception:
         pass
 
+    # 2. Versuche über SSH
     if password:
         try:
             import paramiko
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             client.connect(hostname=host, port=port, username=username, password=password, timeout=8)
-            stdin, stdout, stderr = client.exec_command("sudo /usr/local/bin/dbs-healthcheck")
-            output = stdout.read().decode("utf-8", errors="replace")
-            client.close()
-            return jsonify({"success": True, "output": output})
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
 
-    return jsonify({"success": False, "error": "Keine Verbindung zum Pi"}), 500
+            # Prüfe ob /usr/local/bin/dbs-healthcheck auf dem Pi existiert, andernfalls hochladen
+            stdin, stdout, stderr = client.exec_command("[ -x /usr/local/bin/dbs-healthcheck ] && echo 'exists'")
+            if stdout.read().decode().strip() != "exists":
+                pkg_hc = os.path.join(os.path.dirname(__file__), "..", "package", "files", "dbs-healthcheck.sh")
+                if not os.path.exists(pkg_hc):
+                    pkg_hc = "/app/package/files/dbs-healthcheck.sh"
+                if os.path.exists(pkg_hc):
+                    sftp = client.open_sftp()
+                    sftp.put(pkg_hc, "/tmp/dbs-healthcheck.sh")
+                    sftp.close()
+                    client.exec_command(f"echo '{password}' | sudo -S cp /tmp/dbs-healthcheck.sh /usr/local/bin/dbs-healthcheck && echo '{password}' | sudo -S chmod 755 /usr/local/bin/dbs-healthcheck")
+
+            # Healthcheck via SSH ausführen (mit sudo-Passwort Übergabe)
+            cmd = f"echo '{password}' | sudo -S /usr/local/bin/dbs-healthcheck"
+            stdin, stdout, stderr = client.exec_command(cmd, timeout=30)
+            output = stdout.read().decode("utf-8", errors="replace")
+            err_output = stderr.read().decode("utf-8", errors="replace")
+
+            # Falls stdout leer, versuche direkt das Logfile zu lesen
+            if not output.strip():
+                try:
+                    sftp = client.open_sftp()
+                    with sftp.open("/var/log/dbskiosk-healthcheck.log", "r") as f:
+                        output = f.read().decode("utf-8", errors="replace")
+                    sftp.close()
+                except Exception:
+                    pass
+
+            client.close()
+
+            if output.strip():
+                return jsonify({"success": True, "output": output})
+            else:
+                err_msg = err_output.strip() or "Healthcheck lieferte keine Ausgabe"
+                return jsonify({"success": False, "error": err_msg}), 500
+        except Exception as e:
+            return jsonify({"success": False, "error": f"SSH Fehler: {str(e)}"}), 500
+
+    return jsonify({"success": False, "error": "Keine Verbindung zum Pi möglich (weder per API noch per SSH)"}), 500
 
 
 @app.route("/api/provision/stream")
@@ -805,13 +918,13 @@ def handle_playlist():
     fleet = load_fleet_data()
     dev_id = request.args.get("device_id")
     if request.method == "POST":
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         dev_id = data.get("device_id") or dev_id
     device = get_active_device(fleet, dev_id)
     base_url = get_pi_api_base(device)
     try:
         if request.method == "POST":
-            resp = requests.post(f"{base_url}/api/kiosk/playlist", json=request.json, auth=get_pi_auth(device), timeout=8)
+            resp = requests.post(f"{base_url}/api/kiosk/playlist", json=request.get_json(silent=True) or {}, auth=get_pi_auth(device), timeout=8)
         else:
             resp = requests.get(f"{base_url}/api/kiosk/playlist", auth=get_pi_auth(device), timeout=4)
         return Response(resp.content, status=resp.status_code, content_type="application/json")
@@ -823,7 +936,7 @@ def handle_playlist():
 def handle_bell_schedule():
     fleet = load_fleet_data()
     if request.method == "POST":
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         fleet["central_bell_schedule"] = data.get("schedule", [])
         save_fleet_data(fleet)
 
@@ -861,7 +974,7 @@ def handle_bell_schedule():
 @app.route("/api/bell/play", methods=["POST"])
 def play_bell():
     fleet = load_fleet_data()
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     dev_id = data.get("device_id") or request.args.get("device_id")
     device = get_active_device(fleet, dev_id)
     base_url = get_pi_api_base(device)
@@ -900,7 +1013,7 @@ def upload_bell():
 @app.route("/api/cec/screen", methods=["POST"])
 def control_screen():
     fleet = load_fleet_data()
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     dev_id = data.get("device_id") or request.args.get("device_id")
     device = get_active_device(fleet, dev_id)
     base_url = get_pi_api_base(device)
@@ -914,7 +1027,7 @@ def control_screen():
 @app.route("/api/cec/schedule", methods=["POST"])
 def set_cec_schedule():
     fleet = load_fleet_data()
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     dev_id = data.get("device_id") or request.args.get("device_id")
     device = get_active_device(fleet, dev_id)
     base_url = get_pi_api_base(device)
@@ -922,6 +1035,54 @@ def set_cec_schedule():
         resp = requests.post(f"{base_url}/api/schedule", json=data, auth=get_pi_auth(device), timeout=5)
         return Response(resp.content, status=resp.status_code, content_type="application/json")
     except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+
+@app.route("/api/pi/shutdown", methods=["POST"])
+def pi_shutdown():
+    fleet = load_fleet_data()
+    data = request.get_json(silent=True) or {}
+    dev_id = data.get("device_id") or request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+    result = trigger_device_power_action(device, "shutdown")
+    status_code = 200 if result.get("success") else 500
+    return jsonify(result), status_code
+
+
+@app.route("/api/pi/reboot", methods=["POST"])
+def pi_reboot():
+    fleet = load_fleet_data()
+    data = request.get_json(silent=True) or {}
+    dev_id = data.get("device_id") or request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+    result = trigger_device_power_action(device, "reboot")
+    status_code = 200 if result.get("success") else 500
+    return jsonify(result), status_code
+
+
+@app.route("/api/kiosk/restart", methods=["POST"])
+def restart_kiosk_browser():
+    fleet = load_fleet_data()
+    data = request.get_json(silent=True) or {}
+    dev_id = data.get("device_id") or request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+    base_url = get_pi_api_base(device)
+    try:
+        resp = requests.post(f"{base_url}/api/kiosk/restart", auth=get_pi_auth(device), timeout=5)
+        return Response(resp.content, status=resp.status_code, content_type="application/json")
+    except Exception as e:
+        password = device.get("password")
+        if password:
+            try:
+                import paramiko
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                client.connect(hostname=device.get("host"), port=int(device.get("port", 22)), username=device.get("username", "dbsadmin"), password=password, timeout=5)
+                client.exec_command("sudo systemctl restart kiosk.service")
+                client.close()
+                return jsonify({"success": True, "message": "Kiosk-Dienst per SSH neu gestartet"})
+            except Exception:
+                pass
         return jsonify({"error": str(e)}), 503
 
 

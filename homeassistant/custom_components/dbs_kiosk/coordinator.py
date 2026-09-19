@@ -127,6 +127,24 @@ class KioskCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Fehler beim Neustart des Kiosks: %s", e)
             return False
 
+    async def async_shutdown_pi(self) -> bool:
+        """Shutdown the Raspberry Pi device."""
+        try:
+            async with self.session.post(f"{self.base_url}/api/system/shutdown") as response:
+                return response.status == 200
+        except Exception as e:
+            _LOGGER.error("Fehler beim Herunterfahren des dbsKioskPi: %s", e)
+            return False
+
+    async def async_reboot_pi(self) -> bool:
+        """Reboot the Raspberry Pi device."""
+        try:
+            async with self.session.post(f"{self.base_url}/api/system/reboot") as response:
+                return response.status == 200
+        except Exception as e:
+            _LOGGER.error("Fehler beim Neustart des dbsKioskPi: %s", e)
+            return False
+
     async def async_close(self):
         """Close the client session."""
         if self.session and not self.session.closed:

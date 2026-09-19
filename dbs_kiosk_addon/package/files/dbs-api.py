@@ -566,6 +566,24 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             self._send_json({"success": True, "message": "Kiosk service restarting"})
             return
 
+        elif path == "/api/system/shutdown":
+            log_config_event("System wird heruntergefahren (Shutdown via API)")
+            self._send_json({"success": True, "message": "System is shutting down now..."})
+            def do_shutdown():
+                time.sleep(1)
+                subprocess.run(["systemctl", "poweroff"])
+            threading.Thread(target=do_shutdown, daemon=True).start()
+            return
+
+        elif path == "/api/system/reboot":
+            log_config_event("System wird neu gestartet (Reboot via API)")
+            self._send_json({"success": True, "message": "System is rebooting now..."})
+            def do_reboot():
+                time.sleep(1)
+                subprocess.run(["systemctl", "reboot"])
+            threading.Thread(target=do_reboot, daemon=True).start()
+            return
+
         self._send_json({"error": "Not Found"}, 404)
 
 

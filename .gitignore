@@ -13,3 +13,7 @@ Thumbs.db
 # Local custom config overrides (if any)
 *.local
 kiosk.conf.bak
+
+# Python cache
+__pycache__/
+*.py[cod]

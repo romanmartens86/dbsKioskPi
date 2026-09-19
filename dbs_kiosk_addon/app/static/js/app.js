@@ -34,7 +34,7 @@ function switchTab(tabId) {
   if (tabId === 'fleet') loadFleetDashboard();
   if (tabId === 'kiosk') loadPlaylist();
   if (tabId === 'bell') { loadBellSchedule(); fetchStatus(); }
-  if (tabId === 'status') fetchStatus();
+  if (tabId === 'status') { fetchStatus(); updateLogLinks(); }
 }
 
 // -----------------------------------------------------------------------------
@@ -117,6 +117,7 @@ async function onDeviceSelectChange(devId) {
       populateSetupFormWithActiveDevice();
       fetchStatus();
       loadPlaylist();
+      updateLogLinks();
       showToast(`Aktives Display gewechselt zu: ${data.active_device.name}`);
     }
   } catch (e) {
@@ -318,10 +319,16 @@ async function loadFleetDashboard() {
             📺 Playlist
           </button>
           <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 10px;" onclick="selectDeviceAndTab('${dev.id}', 'cec')">
-            ⚡ TV-Steuerung
+            ⚡ TV
           </button>
           <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 10px;" onclick="selectDeviceAndTab('${dev.id}', 'setup')">
             ⚙️ Setup
+          </button>
+          <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 8px;" title="Raspberry Pi neu starten (Reboot)" onclick="rebootDevice('${dev.id}', '${escapeHtml(dev.name)}')">
+            🔁
+          </button>
+          <button class="btn btn-danger" style="font-size: 12px; padding: 5px 9px;" title="Raspberry Pi herunterfahren (Shutdown)" onclick="shutdownDevice('${dev.id}', '${escapeHtml(dev.name)}')">
+            🛑 Aus
           </button>
         </div>
       `;
@@ -337,7 +344,9 @@ async function triggerFleetAction(action) {
   const names = {
     screen_on: 'alle Fernseher einzuschalten',
     screen_off: 'alle Fernseher in Standby zu versetzen',
-    reload: 'alle Kiosk-Bildschirme neu zu laden'
+    reload: 'alle Kiosk-Bildschirme neu zu laden',
+    shutdown: 'ALLE Displays herunterzufahren (Achtung: Erfordert physischen Kaltstart!)',
+    reboot: 'alle Displays neu zu starten'
   };
   if (!confirm(`Möchtest du wirklich ${names[action] || action}?`)) return;
 
@@ -801,11 +810,117 @@ async function saveCecSchedule() {
 }
 
 async function restartKioskService() {
-  showToast('Starte Kiosk-Browser neu...');
+  const activeDev = fleetDevices.find(d => d.id === activeDeviceId) || { name: 'Aktuelles Display' };
+  showToast(`Starte Kiosk-Browser auf "${activeDev.name}" neu...`);
   try {
-    await fetch(apiUrl(`/api/kiosk/status?device_id=${activeDeviceId}`));
-    showToast('Befehl gesendet.');
-  } catch (e) {}
+    const res = await fetch(apiUrl('/api/kiosk/restart'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: activeDeviceId })
+    });
+    const data = await res.json();
+    if (res.ok && data.success !== false) {
+      showToast('Kiosk-Browser wird neu gestartet.');
+      setTimeout(fetchStatus, 3000);
+    } else {
+      showToast(`Fehler beim Neustart: ${data.error || 'Unbekannt'}`, true);
+    }
+  } catch (e) {
+    showToast(`Netzwerkfehler: ${e}`, true);
+  }
+}
+
+async function rebootPiDevice() {
+  const activeDev = fleetDevices.find(d => d.id === activeDeviceId) || { name: 'Aktuelles Display' };
+  if (!confirm(`Möchtest du das Gerät "${activeDev.name}" wirklich komplett neu starten (Reboot)?`)) return;
+
+  showToast(`Sende Reboot-Befehl an "${activeDev.name}"...`);
+  try {
+    const res = await fetch(apiUrl('/api/pi/reboot'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: activeDeviceId })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      showToast(`System-Neustart initiiert: ${data.message}`);
+      setTimeout(fetchStatus, 4000);
+    } else {
+      showToast(`Fehler beim Neustart: ${data.error || 'Unbekannt'}`, true);
+    }
+  } catch (e) {
+    showToast(`Netzwerkfehler: ${e}`, true);
+  }
+}
+
+async function shutdownPiDevice() {
+  const activeDev = fleetDevices.find(d => d.id === activeDeviceId) || { name: 'Aktuelles Display' };
+  if (!confirm(`⚠️ ACHTUNG: Möchtest du das Gerät "${activeDev.name}" wirklich herunterfahren?\n\nDas Display schaltet sich vollständig ab und kann erst wieder gestartet werden, wenn die Stromversorgung physisch getrennt und wieder angeschlossen wird (Kaltstart).`)) return;
+
+  showToast(`Fahre "${activeDev.name}" herunter...`);
+  try {
+    const res = await fetch(apiUrl('/api/pi/shutdown'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: activeDeviceId })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      showToast(`Gerät wird heruntergefahren: ${data.message}`);
+      const badge = document.getElementById('pi-status-badge');
+      const badgeText = document.getElementById('pi-status-text');
+      if (badge) badge.className = 'badge offline';
+      if (badgeText) badgeText.innerText = 'Wird heruntergefahren...';
+    } else {
+      showToast(`Fehler beim Herunterfahren: ${data.error || 'Unbekannt'}`, true);
+    }
+  } catch (e) {
+    showToast(`Netzwerkfehler: ${e}`, true);
+  }
+}
+
+async function rebootDevice(devId, devName) {
+  if (!confirm(`Möchtest du das Display "${devName}" wirklich neu starten (Reboot)?`)) return;
+
+  showToast(`Sende Reboot-Befehl an "${devName}"...`);
+  try {
+    const res = await fetch(apiUrl('/api/pi/reboot'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: devId })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      showToast(data.message || `Gerät "${devName}" startet neu.`);
+      setTimeout(loadFleetDashboard, 3000);
+    } else {
+      showToast(`Fehler: ${data.error || 'Neustart fehlgeschlagen'}`, true);
+    }
+  } catch (e) {
+    showToast(`Netzwerkfehler: ${e}`, true);
+  }
+}
+
+async function shutdownDevice(devId, devName) {
+  if (!confirm(`⚠️ ACHTUNG: Möchtest du das Display "${devName}" wirklich herunterfahren?\n\nDas Display schaltet sich vollständig ab und kann erst wieder gestartet werden, wenn die Stromversorgung physisch getrennt und wieder angeschlossen wird (Kaltstart).`)) return;
+
+  showToast(`Fahre "${devName}" herunter...`);
+  try {
+    const res = await fetch(apiUrl('/api/pi/shutdown'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: devId })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      showToast(data.message || `Gerät "${devName}" wird heruntergefahren.`);
+      setTimeout(loadFleetDashboard, 3000);
+    } else {
+      showToast(`Fehler: ${data.error || 'Herunterfahren fehlgeschlagen'}`, true);
+    }
+  } catch (e) {
+    showToast(`Netzwerkfehler: ${e}`, true);
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -853,6 +968,21 @@ async function fetchStatus() {
   }
 }
 
+function updateLogLinks() {
+  const devId = activeDeviceId || '';
+  const viewHc = document.getElementById('link-view-healthcheck');
+  const dlHc = document.getElementById('link-download-healthcheck');
+  const viewInst = document.getElementById('link-view-install-log');
+  const dlInst = document.getElementById('link-download-install-log');
+  const viewCfg = document.getElementById('link-view-config-log');
+
+  if (viewHc) viewHc.href = apiUrl(`/api/pi/healthcheck?device_id=${devId}`);
+  if (dlHc) dlHc.href = apiUrl(`/api/pi/healthcheck?device_id=${devId}`);
+  if (viewInst) viewInst.href = apiUrl(`/api/pi/download-install-log?device_id=${devId}`);
+  if (dlInst) dlInst.href = apiUrl(`/api/pi/download-install-log?device_id=${devId}`);
+  if (viewCfg) viewCfg.href = apiUrl(`/api/pi/download-config-log?device_id=${devId}`);
+}
+
 async function runLiveHealthcheck() {
   const btn = document.getElementById('btn-run-healthcheck');
   const box = document.getElementById('healthcheck-result-box');
@@ -865,18 +995,29 @@ async function runLiveHealthcheck() {
   out.innerText = 'Starte Tiefendiagnose auf dem Raspberry Pi... Bitte ca. 5 Sekunden warten...\n';
 
   try {
-    const res = await fetch(apiUrl(`/api/pi/healthcheck/run?device_id=${activeDeviceId}`), { method: 'POST' });
-    const data = await res.json();
+    const res = await fetch(apiUrl(`/api/pi/healthcheck/run?device_id=${activeDeviceId}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: activeDeviceId })
+    });
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (parseErr) {
+      throw new Error(`Ungültige Antwort vom Server (${res.status}): ${text.substring(0, 150)}`);
+    }
+
     if (data.success && data.output) {
       out.innerText = data.output;
       showToast('Healthcheck erfolgreich abgeschlossen!');
     } else {
-      out.innerText = 'Fehler: ' + (data.error || 'Unbekannter Fehler');
+      out.innerText = 'Fehler bei der Diagnose: ' + (data.error || 'Unbekannter Fehler');
       showToast('Healthcheck fehlgeschlagen: ' + (data.error || ''), true);
     }
   } catch (err) {
-    out.innerText = 'Verbindungsfehler: ' + err;
-    showToast('Verbindungsfehler: ' + err, true);
+    out.innerText = 'Verbindungsfehler: ' + (err.message || err);
+    showToast('Verbindungsfehler: ' + (err.message || err), true);
   } finally {
     btn.disabled = false;
     btn.innerText = '🔍 Healthcheck jetzt live ausführen';
@@ -888,6 +1029,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   await loadFleetData();
   loadFleetDashboard();
   fetchStatus();
+  updateLogLinks();
 
   // Dropzone setup
   const dropzone = document.getElementById('bell-dropzone');

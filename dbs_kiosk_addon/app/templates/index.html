@@ -254,11 +254,13 @@
 
         <hr style="border: 0; border-top: 1px solid var(--border); margin-bottom: 20px;">
 
-        <h3 style="font-size: 15px; margin-bottom: 12px;">Live-Schaltung:</h3>
+        <h3 style="font-size: 15px; margin-bottom: 12px;">Live-Schaltung & Steuerung:</h3>
         <div class="btn-group">
           <button class="btn btn-success" onclick="toggleScreen('on')">📺 TV Jetzt Einschalten (on 0 + as)</button>
           <button class="btn btn-danger" onclick="toggleScreen('off')">🌙 TV Jetzt in Standby (standby 0)</button>
           <button class="btn btn-secondary" onclick="restartKioskService()">🔄 Kiosk-Browser neu starten</button>
+          <button class="btn btn-secondary" onclick="rebootPiDevice()">🔁 Pi neu starten</button>
+          <button class="btn btn-danger" onclick="shutdownPiDevice()">🛑 Pi herunterfahren</button>
         </div>
       </div>
     </div>
@@ -287,7 +289,12 @@
             <p id="stat-bell-info" style="font-size: 18px; font-weight: 600;">-</p>
           </div>
         </div>
-        <button class="btn btn-secondary" style="margin-top: 16px;" onclick="fetchStatus()">🔄 Aktualisieren</button>
+        <div class="btn-group" style="margin-top: 16px;">
+          <button class="btn btn-secondary" onclick="fetchStatus()">🔄 Status aktualisieren</button>
+          <button class="btn btn-secondary" onclick="restartKioskService()">🔄 Kiosk-Browser neu starten</button>
+          <button class="btn btn-secondary" onclick="rebootPiDevice()">🔁 Pi neu starten</button>
+          <button class="btn btn-danger" onclick="shutdownPiDevice()">🛑 Pi herunterfahren</button>
+        </div>
       </div>
 
       <div class="card" style="margin-top: 16px;">
@@ -299,10 +306,10 @@
           <button class="btn btn-success" onclick="runLiveHealthcheck()" id="btn-run-healthcheck" style="display: inline-flex; align-items: center; gap: 6px;">
             🔍 Healthcheck jetzt live ausführen
           </button>
-          <a href="{{ ingress_path }}/api/pi/healthcheck" target="_blank" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+          <a id="link-view-healthcheck" href="{{ ingress_path }}/api/pi/healthcheck" target="_blank" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
             👁️ Diagnose-Bericht ansehen
           </a>
-          <a href="{{ ingress_path }}/api/pi/healthcheck" download="dbskiosk-healthcheck.txt" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+          <a id="link-download-healthcheck" href="{{ ingress_path }}/api/pi/healthcheck" download="dbskiosk-healthcheck.txt" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
             📥 Bericht herunterladen (.txt)
           </a>
         </div>
@@ -317,13 +324,13 @@
           Lade die Logdateien herunter, um im Detail zu analysieren, welche Installationsschritte erfolgreich waren und wo es eventuell Probleme gab.
         </p>
         <div class="btn-group">
-          <a href="{{ ingress_path }}/api/pi/download-install-log" target="_blank" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+          <a id="link-view-install-log" href="{{ ingress_path }}/api/pi/download-install-log" target="_blank" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
             👁️ Installations-Log ansehen
           </a>
-          <a href="{{ ingress_path }}/api/pi/download-install-log" download="dbskiosk-install.txt" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+          <a id="link-download-install-log" href="{{ ingress_path }}/api/pi/download-install-log" download="dbskiosk-install.txt" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
             📥 Installations-Log herunterladen
           </a>
-          <a href="{{ ingress_path }}/api/pi/download-config-log" target="_blank" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+          <a id="link-view-config-log" href="{{ ingress_path }}/api/pi/download-config-log" target="_blank" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
             👁️ Konfigurations-Log ansehen
           </a>
         </div>

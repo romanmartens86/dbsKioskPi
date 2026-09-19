@@ -176,9 +176,12 @@ Das Repository beinhaltet zusätzlich die **Custom Integration** ([`homeassistan
    - Unter **Einstellungen -> Geräte & Dienste -> Integration hinzufügen -> dbsKioskPi**.
    - Gib IP, Benutzer und Passwort ein.
 3. **Verfügbare Entitäten:**
-   - `switch.hdmi_tv_bildschirm`: Fernseher an/aus.
-   - `time.tv_einschaltzeit` & `time.tv_standby_zeit`: Zeiteinheiten.
+   - `switch.hdmi_tv_bildschirm`: Fernseher an/aus (HDMI-CEC).
+   - `time.tv_einschaltzeit` & `time.tv_standby_zeit`: Zeiteinheiten für automatische TV-Schaltung.
    - `button.schulglocke_lauten`: Gong manuell auslösen.
+   - `button.kiosk_neu_starten`: Kiosk-Browserdienst neu starten.
+   - `button.system_neu_starten_reboot`: Raspberry Pi OS komplett neu starten.
+   - `button.system_herunterfahren`: Raspberry Pi OS sicher ausschalten (Shutdown).
    - Dienste: `dbs_kiosk.play_bell`, `dbs_kiosk.upload_bell`, `dbs_kiosk.set_screen_schedule`.
 
 Detaillierte Beispiele und Vorlagen findest du in der [Home Assistant Anleitung](file:///c:/Users/romem/dev/dbsKioskPi/homeassistant/README.md).

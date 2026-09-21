@@ -1,5 +1,5 @@
 name: "dbsKioskPi Manager"
-version: "1.5.0"
+version: "1.5.1"
 slug: "dbs_kiosk_addon"
 description: "Flotten-Management für mehrere Raspberry Pis, Webseiten-Rotation, Schulglocken-Planer und HDMI-TV Steuerung für dbsKioskPi"
 url: "https://github.com/romanmartens86/dbsKioskPi"

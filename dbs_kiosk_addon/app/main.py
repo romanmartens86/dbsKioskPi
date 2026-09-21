@@ -312,8 +312,7 @@ def fleet_status():
 def trigger_device_power_action(device, action="shutdown"):
     """
     Triggers shutdown or reboot on a device.
-    First tries REST-API endpoint (/api/system/shutdown or /api/system/reboot).
-    Falls back to SSH (sudo poweroff / sudo reboot) if API is unreachable or returns error.
+    Uses REST-API and SSH (with sudo -S and aggressive flags) to guarantee execution.
     """
     host = device.get("host")
     if not host:
@@ -321,33 +320,47 @@ def trigger_device_power_action(device, action="shutdown"):
 
     action_label = "Herunterfahren" if action == "shutdown" else "Neustarten"
     api_endpoint = "/api/system/shutdown" if action == "shutdown" else "/api/system/reboot"
-    ssh_cmd = "sudo systemctl poweroff || sudo poweroff || sudo shutdown -h now" if action == "shutdown" else "sudo systemctl reboot || sudo reboot"
+    password = device.get("password", "")
+    username = device.get("username", "dbsadmin")
+    port = int(device.get("port", 22))
+
+    if action == "shutdown":
+        ssh_inner = f"echo '{password}' | sudo -S systemctl poweroff -i --no-block 2>/dev/null || echo '{password}' | sudo -S poweroff -f 2>/dev/null || echo '{password}' | sudo -S shutdown -h now 2>/dev/null || echo '{password}' | sudo -S sh -c 'echo 1 > /proc/sys/kernel/sysrq && echo o > /proc/sysrq-trigger' 2>/dev/null"
+    else:
+        ssh_inner = f"echo '{password}' | sudo -S systemctl reboot -i --no-block 2>/dev/null || echo '{password}' | sudo -S reboot -f 2>/dev/null || echo '{password}' | sudo -S shutdown -r now 2>/dev/null || echo '{password}' | sudo -S sh -c 'echo 1 > /proc/sys/kernel/sysrq && echo b > /proc/sysrq-trigger' 2>/dev/null"
 
     # 1. Try REST API
+    api_worked = False
     try:
         base_url = get_pi_api_base(device)
-        resp = requests.post(f"{base_url}{api_endpoint}", auth=get_pi_auth(device), timeout=4)
+        resp = requests.post(f"{base_url}{api_endpoint}", auth=get_pi_auth(device), timeout=3)
         if resp.status_code == 200:
-            return {"success": True, "method": "api", "message": f"Gerät '{device.get('name')}' wird per API heruntergefahren." if action == "shutdown" else f"Gerät '{device.get('name')}' wird per API neu gestartet."}
+            api_worked = True
     except Exception:
         pass
 
-    # 2. Try SSH fallback
-    password = device.get("password")
+    # 2. Also trigger via SSH if password is known to guarantee the power action takes effect
+    # (crucial if an older daemon is on the Pi or inhibitor locks blocked systemd)
+    ssh_worked = False
     if password:
         try:
             import paramiko
-            port = int(device.get("port", 22))
-            username = device.get("username", "dbsadmin")
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(hostname=host, port=port, username=username, password=password, timeout=6)
-            # Execute command in background so SSH disconnects cleanly
-            client.exec_command(f"nohup sh -c 'sleep 1; {ssh_cmd}' >/dev/null 2>&1 &")
+            client.connect(hostname=host, port=port, username=username, password=password, timeout=4)
+            client.exec_command(f"nohup sh -c 'sleep 1; {ssh_inner}' >/dev/null 2>&1 &")
             client.close()
-            return {"success": True, "method": "ssh", "message": f"Gerät '{device.get('name')}' wird per SSH {action_label.lower()}."}
-        except Exception as e:
-            return {"success": False, "error": f"SSH Fehler: {e}"}
+            ssh_worked = True
+        except Exception:
+            pass
+
+    if api_worked or ssh_worked:
+        method = "API & SSH" if (api_worked and ssh_worked) else ("API" if api_worked else "SSH")
+        return {
+            "success": True,
+            "method": method,
+            "message": f"Gerät '{device.get('name')}' wird per {method} {action_label.lower()}."
+        }
 
     return {"success": False, "error": f"Gerät '{device.get('name')}' konnte weder per API noch per SSH erreicht werden"}
 

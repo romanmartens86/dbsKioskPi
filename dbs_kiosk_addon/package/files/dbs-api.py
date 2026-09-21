@@ -571,7 +571,26 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             self._send_json({"success": True, "message": "System is shutting down now..."})
             def do_shutdown():
                 time.sleep(1)
-                subprocess.run(["systemctl", "poweroff"])
+                cmds = [
+                    ["systemctl", "poweroff", "-i", "--no-block"],
+                    ["systemctl", "poweroff", "--force"],
+                    ["/sbin/poweroff", "-f"],
+                    ["/sbin/shutdown", "-h", "now"],
+                    ["poweroff", "-f"],
+                    ["shutdown", "-h", "now"]
+                ]
+                for cmd in cmds:
+                    try:
+                        res = subprocess.run(cmd, capture_output=True, timeout=5)
+                        if res.returncode == 0:
+                            break
+                    except Exception:
+                        pass
+                try:
+                    subprocess.run("echo 1 > /proc/sys/kernel/sysrq 2>/dev/null && echo o > /proc/sysrq-trigger 2>/dev/null", shell=True, timeout=2)
+                except Exception:
+                    pass
+
             threading.Thread(target=do_shutdown, daemon=True).start()
             return
 
@@ -580,7 +599,26 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             self._send_json({"success": True, "message": "System is rebooting now..."})
             def do_reboot():
                 time.sleep(1)
-                subprocess.run(["systemctl", "reboot"])
+                cmds = [
+                    ["systemctl", "reboot", "-i", "--no-block"],
+                    ["systemctl", "reboot", "--force"],
+                    ["/sbin/reboot", "-f"],
+                    ["/sbin/shutdown", "-r", "now"],
+                    ["reboot", "-f"],
+                    ["shutdown", "-r", "now"]
+                ]
+                for cmd in cmds:
+                    try:
+                        res = subprocess.run(cmd, capture_output=True, timeout=5)
+                        if res.returncode == 0:
+                            break
+                    except Exception:
+                        pass
+                try:
+                    subprocess.run("echo 1 > /proc/sys/kernel/sysrq 2>/dev/null && echo b > /proc/sysrq-trigger 2>/dev/null", shell=True, timeout=2)
+                except Exception:
+                    pass
+
             threading.Thread(target=do_reboot, daemon=True).start()
             return
 

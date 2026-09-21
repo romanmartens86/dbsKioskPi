@@ -23,6 +23,15 @@ if ! command -v cec-client >/dev/null 2>&1; then
     exit 1
 fi
 
+# Stelle sicher, dass der DRM-HDMI-Connector aktiv ist.
+# Wenn ein Beamer/TV im Standby HPD abschaltet, markiert der Linux-KMS-Treiber den Port
+# als 'disconnected', was die physikalische CEC-Adresse (f.f.f.f) und Kommunikation blockiert.
+for st in /sys/class/drm/card*-HDMI-A-*/status; do
+    if [ -f "$st" ] && [ "$(cat "$st" 2>/dev/null)" != "connected" ]; then
+        echo on > "$st" 2>/dev/null || true
+    fi
+done
+
 case "$ACTION" in
     on|force-on)
         echo "[CEC] Schalte TV ein (on 0)..."

@@ -382,9 +382,9 @@ def fleet_action():
         auth = get_pi_auth(dev)
         try:
             if action == "screen_on":
-                requests.post(f"{base_url}/api/screen", json={"state": "on"}, auth=auth, timeout=4)
+                requests.post(f"{base_url}/api/screen", json={"action": "on", "state": "on"}, auth=auth, timeout=4)
             elif action == "screen_off":
-                requests.post(f"{base_url}/api/screen", json={"state": "off"}, auth=auth, timeout=4)
+                requests.post(f"{base_url}/api/screen", json={"action": "off", "state": "off"}, auth=auth, timeout=4)
             elif action == "reload":
                 requests.post(f"{base_url}/api/kiosk/reload", json={}, auth=auth, timeout=4)
             elif action == "restart_kiosk":
@@ -779,6 +779,7 @@ def deploy_latest_dbs_api(device):
     pkg_cycler = find_package_file("files/kiosk-cycler.html")
     pkg_input = find_package_file("files/dbs-input.sh")
     pkg_rules = find_package_file("files/99-dbskiosk-input.rules")
+    pkg_cec = find_package_file("files/cec-control.sh")
 
     try:
         import paramiko
@@ -799,6 +800,8 @@ def deploy_latest_dbs_api(device):
             sftp.put(pkg_input, "/tmp/dbs-input.sh")
         if pkg_rules:
             sftp.put(pkg_rules, "/tmp/99-dbskiosk-input.rules")
+        if pkg_cec:
+            sftp.put(pkg_cec, "/tmp/cec-control.sh")
         sftp.close()
 
         # 2. Execute installation script as root and wait for completion
@@ -810,7 +813,7 @@ def deploy_latest_dbs_api(device):
             f"chmod 755 /usr/local/bin/dbs-api && "
             f"touch /var/log/dbskiosk-comm.log && "
             f"chmod 666 /var/log/dbskiosk-comm.log && "
-            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.6.0 aktualisiert (Mauszeiger & Tastatursperre)\" >> /var/log/dbskiosk-comm.log"
+            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.6.1 aktualisiert (Mauszeiger & Tastatursperre, CEC-Fix)\" >> /var/log/dbskiosk-comm.log"
         )
         if pkg_hc:
             install_script += " && cp /tmp/dbs-healthcheck.sh /usr/local/bin/dbs-healthcheck && chmod 755 /usr/local/bin/dbs-healthcheck"
@@ -822,8 +825,13 @@ def deploy_latest_dbs_api(device):
             install_script += " && cp /tmp/dbs-input.sh /usr/local/bin/dbs-input && chmod 755 /usr/local/bin/dbs-input"
         if pkg_rules:
             install_script += " && cp /tmp/99-dbskiosk-input.rules /etc/udev/rules.d/99-dbskiosk-input.rules && chmod 644 /etc/udev/rules.d/99-dbskiosk-input.rules && udevadm control --reload-rules && udevadm trigger"
+        if pkg_cec:
+            install_script += " && cp /tmp/cec-control.sh /usr/local/bin/dbs-cec && chmod 755 /usr/local/bin/dbs-cec"
 
+        # HDMI Standby Keepalive & Hotplug Fix (cmdline.txt & config.txt)
         install_script += (
+            " && ([ -f /boot/firmware/cmdline.txt ] && (grep -q 'video=HDMI-A-1:' /boot/firmware/cmdline.txt || sed -i 's/$/ video=HDMI-A-1:1920x1080@60D/' /boot/firmware/cmdline.txt) || true)"
+            " && ([ -f /boot/firmware/config.txt ] && (grep -q 'hdmi_force_hotplug=1' /boot/firmware/config.txt || sed -i '/\\[all\\]/a hdmi_force_hotplug=1\\nhdmi_group=1\\nhdmi_mode=16' /boot/firmware/config.txt) || true)"
             " && printf '[Service]\\nEnvironment=XCURSOR_THEME=\"\"\\nEnvironment=XCURSOR_SIZE=0\\nInaccessiblePaths=/usr/share/icons\\n' > /etc/systemd/system/kiosk.service.d/hide-cursor.conf"
             " && chmod 644 /etc/systemd/system/kiosk.service.d/hide-cursor.conf"
             " && systemctl daemon-reload"

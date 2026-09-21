@@ -151,8 +151,30 @@ if [ -f "$CONFIG_TXT" ]; then
         echo "gpu_mem=128" >> "$CONFIG_TXT"
         log_success "gpu_mem=128 zu $CONFIG_TXT hinzugefügt."
     fi
+
+    # HDMI-CEC Hotplug & Full-HD Lock
+    if ! grep -q "^hdmi_force_hotplug=1" "$CONFIG_TXT"; then
+        echo "" >> "$CONFIG_TXT"
+        echo "# dbsKioskPi HDMI-CEC Hotplug & Standby Fix" >> "$CONFIG_TXT"
+        echo "hdmi_force_hotplug=1" >> "$CONFIG_TXT"
+        echo "hdmi_group=1" >> "$CONFIG_TXT"
+        echo "hdmi_mode=16" >> "$CONFIG_TXT"
+        log_success "HDMI Hotplug & 1080p60 Modus zu $CONFIG_TXT hinzugefügt."
+    fi
 else
     log_warn "Keine config.txt unter /boot/firmware oder /boot gefunden. Überspringe GPU-Speichereintrag."
+fi
+
+# Kernel cmdline: Force HDMI-A-1 to connected digital 1080p60 to keep CEC alive during display standby
+CMDLINE_TXT="/boot/firmware/cmdline.txt"
+if [ ! -f "$CMDLINE_TXT" ]; then
+    CMDLINE_TXT="/boot/cmdline.txt"
+fi
+if [ -f "$CMDLINE_TXT" ]; then
+    if ! grep -q "video=HDMI-A-1:" "$CMDLINE_TXT"; then
+        sed -i 's/$/ video=HDMI-A-1:1920x1080@60D/' "$CMDLINE_TXT"
+        log_success "video=HDMI-A-1:1920x1080@60D zu $CMDLINE_TXT hinzugefügt (CEC Standby-Keepalive)."
+    fi
 fi
 
 log_info "Konfiguriere komprimierten RAM-Swap (zramswap: ALGO=lz4, PERCENT=50)..."

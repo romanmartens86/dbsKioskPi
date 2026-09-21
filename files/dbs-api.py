@@ -452,7 +452,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
 
             data = {
                 "service": "dbsKioskPi",
-                "version": "1.6.0",
+                "version": "1.6.1",
                 "kiosk_service": kiosk_active,
                 "screen_power": cec_power,
                 "cec_enabled": cfg.get("CEC_ENABLED", "true") == "true",
@@ -521,7 +521,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             except Exception:
                 req = {}
 
-            action = req.get("action", "on").lower()
+            action = (req.get("action") or req.get("state") or "on").lower()
             if action in ("on", "force-on"):
                 subprocess.Popen(["/usr/local/bin/dbs-cec", "force-on"])
                 self._send_json({"success": True, "screen": "on"}, log_summary="HDMI-CEC Bildschirm EIN geschaltet", duration_ms=(time.time()-t0)*1000)

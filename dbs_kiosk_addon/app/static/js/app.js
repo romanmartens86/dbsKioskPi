@@ -995,12 +995,40 @@ function updateLogLinks() {
   const viewInst = document.getElementById('link-view-install-log');
   const dlInst = document.getElementById('link-download-install-log');
   const viewCfg = document.getElementById('link-view-config-log');
+  const viewComm = document.getElementById('link-view-comm-log');
+  const dlComm = document.getElementById('link-download-comm-log');
+  const dlCommAll = document.getElementById('link-download-comm-log-all');
 
   if (viewHc) viewHc.href = apiUrl(`/api/pi/healthcheck?device_id=${devId}`);
   if (dlHc) dlHc.href = apiUrl(`/api/pi/healthcheck?device_id=${devId}`);
   if (viewInst) viewInst.href = apiUrl(`/api/pi/download-install-log?device_id=${devId}`);
   if (dlInst) dlInst.href = apiUrl(`/api/pi/download-install-log?device_id=${devId}`);
   if (viewCfg) viewCfg.href = apiUrl(`/api/pi/download-config-log?device_id=${devId}`);
+  if (viewComm) viewComm.href = apiUrl(`/api/pi/download-comm-log?device_id=${devId}&minutes=10`);
+  if (dlComm) dlComm.href = apiUrl(`/api/pi/download-comm-log?device_id=${devId}&minutes=10`);
+  if (dlCommAll) dlCommAll.href = apiUrl(`/api/pi/download-comm-log?device_id=${devId}&minutes=60`);
+}
+
+async function updatePiAgentOnDevice() {
+  const activeDev = fleetDevices.find(d => d.id === activeDeviceId) || { name: 'Aktuelles Display' };
+  if (!confirm(`Möchtest du den dbs-api Hintergrunddienst auf "${activeDev.name}" jetzt auf den neuesten Stand aktualisieren?\n\nDie neue Datei wird per SSH übertragen und der Dienst dbs-api.service neu gestartet.`)) return;
+
+  showToast(`Aktualisiere dbs-api auf "${activeDev.name}"...`);
+  try {
+    const res = await fetch(apiUrl('/api/pi/update-agent'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: activeDeviceId })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      showToast(data.message || 'dbs-api erfolgreich aktualisiert!');
+    } else {
+      showToast(`Fehler: ${data.error || 'Aktualisierung fehlgeschlagen'}`, true);
+    }
+  } catch (err) {
+    showToast(`Verbindungsfehler: ${err.message || err}`, true);
+  }
 }
 
 async function runLiveHealthcheck() {

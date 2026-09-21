@@ -318,6 +318,27 @@
         </div>
       </div>
 
+      <div class="card" style="margin-top: 16px; border: 1px solid var(--accent);">
+        <h2 class="card-title">📡 Live-Kommunikationsprotokoll (Home Assistant ↔ Pi)</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">
+          Protokolliert jeden Aufruf zwischen Home Assistant und diesem Raspberry Pi (Webseiten-Playlists, Lautstärke, HDMI-CEC, Glocken, Statusabfragen und Fehler) sekundengenau. Bei Fehlverhalten kannst du hier das Protokoll der letzten 10 Minuten herunterladen oder direkt ansehen.
+        </p>
+        <div class="btn-group" style="flex-wrap: wrap;">
+          <a id="link-view-comm-log" href="{{ ingress_path }}/api/pi/download-comm-log?minutes=10" target="_blank" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+            👁️ Protokoll (letzte 10 Min.) ansehen
+          </a>
+          <a id="link-download-comm-log" href="{{ ingress_path }}/api/pi/download-comm-log?minutes=10" download="dbskiosk-comm-10min.log" class="btn btn-primary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px; background-color: var(--accent); color: #fff;">
+            📥 Protokoll (letzte 10 Min.) herunterladen
+          </a>
+          <a id="link-download-comm-log-all" href="{{ ingress_path }}/api/pi/download-comm-log?minutes=60" download="dbskiosk-comm-60min.log" class="btn btn-secondary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+            📥 Letzte 60 Minuten herunterladen
+          </a>
+          <button class="btn btn-secondary" onclick="updatePiAgentOnDevice()" style="display: inline-flex; align-items: center; gap: 6px;" title="Überträgt die neueste Version von dbs-api per SSH auf diesen Pi und startet den Dienst neu">
+            🔄 dbs-api Dienst auf dem Pi aktualisieren
+          </button>
+        </div>
+      </div>
+
       <div class="card" style="margin-top: 16px;">
         <h2 class="card-title">📜 System- & Installationsprotokolle</h2>
         <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">

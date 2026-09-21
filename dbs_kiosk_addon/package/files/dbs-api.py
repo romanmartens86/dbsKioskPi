@@ -15,7 +15,8 @@ import threading
 import time
 import ctypes
 import ctypes.util
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -34,6 +35,94 @@ BELL_PATH = os.path.join(SOUNDS_DIR, "bell.mp3")
 INSTALL_LOG_FILE = "/var/log/dbskiosk-install.log"
 CONFIG_LOG_FILE = "/var/log/dbskiosk-config.log"
 HEALTHCHECK_LOG_FILE = "/var/log/dbskiosk-healthcheck.log"
+COMM_LOG_FILE = "/var/log/dbskiosk-comm.log"
+COMM_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
+def log_comm_event(method, path, client_ip, status_code, details="", duration_ms=None):
+    """
+    Appends a timestamped communication log entry to /var/log/dbskiosk-comm.log.
+    Rotates the log file if it exceeds COMM_LOG_MAX_BYTES.
+    """
+    try:
+        now = datetime.now()
+        ts = now.strftime("%Y-%m-%d %H:%M:%S")
+        dur_str = f" [{duration_ms:.1f}ms]" if duration_ms is not None else ""
+        entry = f"[{ts}] [{client_ip}] {method} {path} -> {status_code}{dur_str}"
+        if details:
+            clean_details = str(details).replace("\n", " ").strip()
+            clean_details = re.sub(r'("password"\s*:\s*)"[^"]*"', r'\1"••••"', clean_details)
+            clean_details = re.sub(r'(:[a-zA-Z0-9_-]{4,})@', r':••••@', clean_details)
+            if len(clean_details) > 250:
+                clean_details = clean_details[:250] + "..."
+            entry += f" | {clean_details}"
+        entry += "\n"
+
+        # Rotation
+        if os.path.exists(COMM_LOG_FILE) and os.path.getsize(COMM_LOG_FILE) > COMM_LOG_MAX_BYTES:
+            try:
+                old_file = COMM_LOG_FILE + ".1"
+                if os.path.exists(old_file):
+                    os.remove(old_file)
+                os.rename(COMM_LOG_FILE, old_file)
+            except Exception:
+                pass
+
+        with open(COMM_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(entry)
+    except Exception:
+        pass
+
+
+def get_recent_comm_logs(minutes=10):
+    """
+    Extracts entries from the last `minutes` from COMM_LOG_FILE (and COMM_LOG_FILE.1).
+    """
+    if not os.path.exists(COMM_LOG_FILE):
+        return f"Keine Kommunikationsprotokolle unter {COMM_LOG_FILE} vorhanden.\n"
+
+    try:
+        files_to_read = []
+        old_file = COMM_LOG_FILE + ".1"
+        if os.path.exists(old_file):
+            files_to_read.append(old_file)
+        files_to_read.append(COMM_LOG_FILE)
+
+        lines = []
+        for fp in files_to_read:
+            try:
+                with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                    lines.extend(f.readlines())
+            except Exception:
+                pass
+
+        if minutes <= 0:
+            return "".join(lines)
+
+        cutoff = datetime.now() - timedelta(minutes=minutes)
+        filtered = []
+        for line in lines:
+            if line.startswith("[") and len(line) >= 21 and line[20] == "]":
+                ts_str = line[1:20]
+                try:
+                    t = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                    if t >= cutoff:
+                        filtered.append(line)
+                except Exception:
+                    filtered.append(line)
+            else:
+                if filtered:
+                    filtered.append(line)
+
+        header = f"=== dbsKioskPi Kommunikationsprotokoll (letzte {minutes} Minuten, generiert: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) ===\n"
+        header += f"Filter: Einträge ab {cutoff.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        header += "=" * 80 + "\n\n"
+
+        if not filtered:
+            return header + f"(In den letzten {minutes} Minuten wurden keine HTTP-Anfragen zwischen Home Assistant und diesem Pi aufgezeichnet)\n"
+        return header + "".join(filtered)
+    except Exception as e:
+        return f"Fehler beim Auslesen des Kommunikationsprotokolls: {e}\n"
 
 
 def log_config_event(action):
@@ -157,7 +246,11 @@ def authenticate(username, password):
 
 class KioskAPIHandler(BaseHTTPRequestHandler):
 
-    def _send_json(self, data, code=200):
+    def _log(self, status_code, details="", duration_ms=None):
+        client_ip = self.client_address[0] if hasattr(self, 'client_address') else "unknown"
+        log_comm_event(getattr(self, 'command', 'HTTP'), self.path, client_ip, status_code, details, duration_ms)
+
+    def _send_json(self, data, code=200, log_summary=None, duration_ms=None):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -165,6 +258,8 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
         self.wfile.write(json.dumps(data, indent=2).encode("utf-8"))
+        summary = log_summary if log_summary is not None else (data.get("message") or data.get("error") or "")
+        self._log(code, summary, duration_ms=duration_ms)
 
     def _check_auth(self):
         auth_header = self.headers.get("Authorization")
@@ -186,6 +281,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"error": "Unauthorized"}).encode("utf-8"))
+            self._log(401, "Authentifizierung fehlgeschlagen: Kein oder falsches Passwort")
             return False
         return True
 
@@ -197,11 +293,12 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        t0 = time.time()
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
 
         if path == "/api/health":
-            self._send_json({"status": "ok", "service": "dbsKioskPi"})
+            self._send_json({"status": "ok", "service": "dbsKioskPi"}, duration_ms=(time.time()-t0)*1000)
             return
 
         if path == "/cycler":
@@ -223,15 +320,31 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             if os.path.exists(PLAYLIST_FILE):
                 try:
                     with open(PLAYLIST_FILE, "r", encoding="utf-8") as f:
-                        self._send_json(json.load(f))
+                        data = json.load(f)
+                        self._send_json(data, log_summary=f"Playlist abgefragt ({len(data)} Seiten)", duration_ms=(time.time()-t0)*1000)
                         return
                 except Exception:
                     pass
             cfg = read_config()
-            self._send_json([{"url": cfg.get("KIOSK_URL", ""), "duration": 30}])
+            self._send_json([{"url": cfg.get("KIOSK_URL", ""), "duration": 30}], log_summary="Standard-URL abgefragt", duration_ms=(time.time()-t0)*1000)
             return
 
         if not self._require_auth():
+            return
+
+        if path in ("/api/logs/communication", "/api/logs/comm"):
+            query_params = parse_qs(parsed.query)
+            try:
+                minutes = int(query_params.get("minutes", ["10"])[0])
+            except Exception:
+                minutes = 10
+            data = get_recent_comm_logs(minutes=minutes)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="dbskiosk-comm-{minutes}min.log"')
+            self.end_headers()
+            self.wfile.write(data.encode("utf-8"))
+            self._log(200, f"Kommunikationsprotokoll (letzte {minutes} Minuten) heruntergeladen", duration_ms=(time.time()-t0)*1000)
             return
 
         if path == "/api/logs/install":
@@ -244,12 +357,13 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                     self.send_header("Content-Disposition", 'attachment; filename="dbskiosk-install.log"')
                     self.end_headers()
                     self.wfile.write(data.encode("utf-8"))
+                    self._log(200, "Installationslog heruntergeladen", duration_ms=(time.time()-t0)*1000)
                     return
                 except Exception as e:
-                    self._send_json({"error": str(e)}, status=500)
+                    self._send_json({"error": str(e)}, status=500, duration_ms=(time.time()-t0)*1000)
                     return
             else:
-                self._send_json({"error": "Installationslog /var/log/dbskiosk-install.log nicht vorhanden"}, status=404)
+                self._send_json({"error": "Installationslog /var/log/dbskiosk-install.log nicht vorhanden"}, status=404, duration_ms=(time.time()-t0)*1000)
                 return
 
         if path == "/api/logs/config":
@@ -262,12 +376,13 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                     self.send_header("Content-Disposition", 'attachment; filename="dbskiosk-config.log"')
                     self.end_headers()
                     self.wfile.write(data.encode("utf-8"))
+                    self._log(200, "Konfigurationslog heruntergeladen", duration_ms=(time.time()-t0)*1000)
                     return
                 except Exception as e:
-                    self._send_json({"error": str(e)}, status=500)
+                    self._send_json({"error": str(e)}, status=500, duration_ms=(time.time()-t0)*1000)
                     return
             else:
-                self._send_json({"error": "Konfigurationslog /var/log/dbskiosk-config.log nicht vorhanden"}, status=404)
+                self._send_json({"error": "Konfigurationslog /var/log/dbskiosk-config.log nicht vorhanden"}, status=404, duration_ms=(time.time()-t0)*1000)
                 return
 
         if path in ("/api/healthcheck", "/api/logs/healthcheck"):
@@ -283,23 +398,25 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                     self.send_header("Content-Disposition", 'inline; filename="dbskiosk-healthcheck.txt"')
                     self.end_headers()
                     self.wfile.write(data.encode("utf-8"))
+                    self._log(200, "Healthcheck-Log heruntergeladen", duration_ms=(time.time()-t0)*1000)
                     return
                 except Exception as e:
-                    self._send_json({"error": str(e)}, status=500)
+                    self._send_json({"error": str(e)}, status=500, duration_ms=(time.time()-t0)*1000)
                     return
             else:
-                self._send_json({"error": "Healthcheck-Log nicht vorhanden"}, status=404)
+                self._send_json({"error": "Healthcheck-Log nicht vorhanden"}, status=404, duration_ms=(time.time()-t0)*1000)
                 return
 
         if path == "/api/bell/schedule":
             if os.path.exists(SCHEDULE_FILE):
                 try:
                     with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
-                        self._send_json(json.load(f))
+                        data = json.load(f)
+                        self._send_json(data, log_summary=f"Glocken-Zeitplan abgefragt ({len(data)} Einträge)", duration_ms=(time.time()-t0)*1000)
                         return
                 except Exception:
                     pass
-            self._send_json([])
+            self._send_json([], log_summary="Leeren Glocken-Zeitplan zurückgegeben", duration_ms=(time.time()-t0)*1000)
             return
 
         if path == "/api/status":
@@ -335,7 +452,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
 
             data = {
                 "service": "dbsKioskPi",
-                "version": "1.0.0",
+                "version": "1.4.2",
                 "kiosk_service": kiosk_active,
                 "screen_power": cec_power,
                 "cec_enabled": cfg.get("CEC_ENABLED", "true") == "true",
@@ -348,12 +465,12 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                     "volume": int(cfg.get("BELL_VOLUME", "100"))
                 }
             }
-            self._send_json(data)
+            self._send_json(data, log_summary=f"Live-Status (Kiosk: {kiosk_active}, CEC: {cec_power})", duration_ms=(time.time()-t0)*1000)
             return
 
         elif path == "/api/bell/download":
             if not os.path.exists(BELL_PATH):
-                self._send_json({"error": "No bell sound uploaded yet"}, 404)
+                self._send_json({"error": "No bell sound uploaded yet"}, 404, duration_ms=(time.time()-t0)*1000)
                 return
             try:
                 with open(BELL_PATH, "rb") as f:
@@ -364,13 +481,15 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Disposition", 'attachment; filename="bell.mp3"')
                 self.end_headers()
                 self.wfile.write(content)
+                self._log(200, f"Glocken-Audio heruntergeladen ({len(content)} Bytes)", duration_ms=(time.time()-t0)*1000)
             except Exception as e:
-                self._send_json({"error": str(e)}, 500)
+                self._send_json({"error": str(e)}, 500, duration_ms=(time.time()-t0)*1000)
             return
 
-        self._send_json({"error": "Not Found"}, 404)
+        self._send_json({"error": "Not Found"}, 404, duration_ms=(time.time()-t0)*1000)
 
     def do_POST(self):
+        t0 = time.time()
         if not self._require_auth():
             return
 
@@ -391,12 +510,12 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             action = req.get("action", "on").lower()
             if action in ("on", "force-on"):
                 subprocess.Popen(["/usr/local/bin/dbs-cec", "force-on"])
-                self._send_json({"success": True, "screen": "on"})
+                self._send_json({"success": True, "screen": "on"}, log_summary="HDMI-CEC Bildschirm EIN geschaltet", duration_ms=(time.time()-t0)*1000)
             elif action in ("off", "standby", "force-off"):
                 subprocess.Popen(["/usr/local/bin/dbs-cec", "force-off"])
-                self._send_json({"success": True, "screen": "off"})
+                self._send_json({"success": True, "screen": "off"}, log_summary="HDMI-CEC Bildschirm STANDBY geschaltet", duration_ms=(time.time()-t0)*1000)
             else:
-                self._send_json({"error": f"Invalid screen action: {action}"}, 400)
+                self._send_json({"error": f"Invalid screen action: {action}"}, 400, log_summary=f"Ungültige Screen-Aktion: {action}", duration_ms=(time.time()-t0)*1000)
             return
 
         # ----------------------------------------------------------------------
@@ -407,7 +526,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             try:
                 req = json.loads(body)
             except Exception:
-                self._send_json({"error": "Invalid JSON"}, 400)
+                self._send_json({"error": "Invalid JSON"}, 400, duration_ms=(time.time()-t0)*1000)
                 return
 
             on_time = req.get("on_time")
@@ -432,7 +551,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                 if off_time:
                     subprocess.run(["systemctl", "restart", "kiosk-cec-off.timer"], check=False)
 
-            self._send_json({"success": True, "on_time": on_time, "off_time": off_time})
+            self._send_json({"success": True, "on_time": on_time, "off_time": off_time}, log_summary=f"CEC-Zeiten gespeichert: Ein={on_time}, Aus={off_time}", duration_ms=(time.time()-t0)*1000)
             return
 
         # ----------------------------------------------------------------------
@@ -441,9 +560,9 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
         elif path == "/api/healthcheck/run":
             try:
                 res = subprocess.run(["/usr/local/bin/dbs-healthcheck"], capture_output=True, text=True, timeout=20)
-                self._send_json({"success": True, "output": res.stdout})
+                self._send_json({"success": True, "output": res.stdout}, log_summary="Healthcheck-Diagnose ausgeführt", duration_ms=(time.time()-t0)*1000)
             except Exception as e:
-                self._send_json({"success": False, "error": str(e)}, 500)
+                self._send_json({"success": False, "error": str(e)}, 500, log_summary=f"Healthcheck Fehler: {e}", duration_ms=(time.time()-t0)*1000)
             return
 
         # ----------------------------------------------------------------------
@@ -462,7 +581,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                 args.append(str(volume))
 
             subprocess.Popen(args)
-            self._send_json({"success": True, "message": "School bell is ringing"})
+            self._send_json({"success": True, "message": "School bell is ringing"}, log_summary=f"Schulgong ausgelöst (Lautstärke {volume or 100}%)", duration_ms=(time.time()-t0)*1000)
             return
 
         # ----------------------------------------------------------------------
@@ -473,7 +592,6 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             os.makedirs(SOUNDS_DIR, exist_ok=True)
 
             if "multipart/form-data" in content_type:
-                # Parse multipart
                 form = cgi.FieldStorage(
                     fp=self.rfile,
                     headers=self.headers,
@@ -482,20 +600,19 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                 if "file" in form and form["file"].file:
                     with open(BELL_PATH, "wb") as f:
                         shutil.copyfileobj(form["file"].file, f)
-                    self._send_json({"success": True, "message": "MP3 bell sound uploaded successfully", "size": os.path.getsize(BELL_PATH)})
+                    self._send_json({"success": True, "message": "MP3 bell sound uploaded successfully", "size": os.path.getsize(BELL_PATH)}, log_summary="MP3-Glockendatei hochgeladen", duration_ms=(time.time()-t0)*1000)
                     return
                 else:
-                    self._send_json({"error": "No 'file' field in multipart form"}, 400)
+                    self._send_json({"error": "No 'file' field in multipart form"}, 400, duration_ms=(time.time()-t0)*1000)
                     return
             else:
-                # Raw binary MP3 in body
                 audio_data = self.rfile.read(content_length)
                 if len(audio_data) < 100:
-                    self._send_json({"error": "Uploaded data is too small or invalid"}, 400)
+                    self._send_json({"error": "Uploaded data is too small or invalid"}, 400, duration_ms=(time.time()-t0)*1000)
                     return
                 with open(BELL_PATH, "wb") as f:
                     f.write(audio_data)
-                self._send_json({"success": True, "message": "MP3 bell sound uploaded successfully", "size": len(audio_data)})
+                self._send_json({"success": True, "message": "MP3 bell sound uploaded successfully", "size": len(audio_data)}, log_summary=f"MP3-Glockendatei gespeichert ({len(audio_data)} Bytes)", duration_ms=(time.time()-t0)*1000)
                 return
 
         # ----------------------------------------------------------------------
@@ -506,7 +623,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             try:
                 req = json.loads(body)
             except Exception:
-                self._send_json({"error": "Invalid JSON"}, 400)
+                self._send_json({"error": "Invalid JSON"}, 400, duration_ms=(time.time()-t0)*1000)
                 return
 
             new_url = req.get("url")
@@ -514,9 +631,9 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                 save_config_value("KIOSK_URL", new_url)
                 if req.get("restart", True):
                     subprocess.Popen(["systemctl", "restart", "kiosk.service"])
-                self._send_json({"success": True, "url": new_url})
+                self._send_json({"success": True, "url": new_url}, log_summary=f"Kiosk URL geändert auf: {new_url}", duration_ms=(time.time()-t0)*1000)
             else:
-                self._send_json({"error": "Missing 'url' parameter"}, 400)
+                self._send_json({"error": "Missing 'url' parameter"}, 400, duration_ms=(time.time()-t0)*1000)
             return
 
         # ----------------------------------------------------------------------
@@ -527,21 +644,20 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             try:
                 items = json.loads(body)
                 if not isinstance(items, list):
-                    self._send_json({"error": "Playlist must be a JSON array"}, 400)
+                    self._send_json({"error": "Playlist must be a JSON array"}, 400, duration_ms=(time.time()-t0)*1000)
                     return
                 with open(PLAYLIST_FILE, "w", encoding="utf-8") as f:
                     json.dump(items, f, indent=2)
 
-                # Falls mehr als 1 Seite: Auf Cycler umstellen
                 if len(items) > 1:
                     save_config_value("KIOSK_URL", f"http://localhost:{PORT}/cycler")
                 elif len(items) == 1 and "url" in items[0]:
                     save_config_value("KIOSK_URL", items[0]["url"])
 
                 subprocess.Popen(["systemctl", "restart", "kiosk.service"])
-                self._send_json({"success": True, "count": len(items)})
+                self._send_json({"success": True, "count": len(items)}, log_summary=f"Playlist gespeichert ({len(items)} Webseiten): {json.dumps(items)[:140]}", duration_ms=(time.time()-t0)*1000)
             except Exception as e:
-                self._send_json({"error": str(e)}, 500)
+                self._send_json({"error": str(e)}, 500, log_summary=f"Fehler beim Speichern der Playlist: {e}", duration_ms=(time.time()-t0)*1000)
             return
 
         # ----------------------------------------------------------------------
@@ -552,23 +668,23 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             try:
                 schedule = json.loads(body)
                 if not isinstance(schedule, list):
-                    self._send_json({"error": "Schedule must be an array"}, 400)
+                    self._send_json({"error": "Schedule must be an array"}, 400, duration_ms=(time.time()-t0)*1000)
                     return
                 with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
                     json.dump(schedule, f, indent=2)
-                self._send_json({"success": True, "count": len(schedule)})
+                self._send_json({"success": True, "count": len(schedule)}, log_summary=f"Glocken-Zeitplan aktualisiert ({len(schedule)} Einträge)", duration_ms=(time.time()-t0)*1000)
             except Exception as e:
-                self._send_json({"error": str(e)}, 500)
+                self._send_json({"error": str(e)}, 500, log_summary=f"Fehler bei Glocken-Zeitplan: {e}", duration_ms=(time.time()-t0)*1000)
             return
 
         elif path == "/api/kiosk/restart":
             subprocess.Popen(["systemctl", "restart", "kiosk.service"])
-            self._send_json({"success": True, "message": "Kiosk service restarting"})
+            self._send_json({"success": True, "message": "Kiosk service restarting"}, log_summary="Kiosk-Browser neu gestartet", duration_ms=(time.time()-t0)*1000)
             return
 
         elif path == "/api/system/shutdown":
             log_config_event("System wird heruntergefahren (Shutdown via API)")
-            self._send_json({"success": True, "message": "System is shutting down now..."})
+            self._send_json({"success": True, "message": "System is shutting down now..."}, log_summary="HERUNTERFAHREN ausgelöst", duration_ms=(time.time()-t0)*1000)
             def do_shutdown():
                 time.sleep(1)
                 cmds = [
@@ -596,7 +712,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/system/reboot":
             log_config_event("System wird neu gestartet (Reboot via API)")
-            self._send_json({"success": True, "message": "System is rebooting now..."})
+            self._send_json({"success": True, "message": "System is rebooting now..."}, log_summary="NEUSTART ausgelöst", duration_ms=(time.time()-t0)*1000)
             def do_reboot():
                 time.sleep(1)
                 cmds = [
@@ -622,7 +738,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             threading.Thread(target=do_reboot, daemon=True).start()
             return
 
-        self._send_json({"error": "Not Found"}, 404)
+        self._send_json({"error": "Not Found"}, 404, duration_ms=(time.time()-t0)*1000)
 
 
 def bell_scheduler_loop():

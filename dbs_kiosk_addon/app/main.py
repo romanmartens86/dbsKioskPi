@@ -506,33 +506,8 @@ def test_ssh():
             device["name"] = data.get("name").strip()
         save_fleet_data(fleet)
 
-        # Falls dbs-api auf dem Pi existiert, stelle sicher, dass die neue Version aktiv ist und Auth passt
-        try:
-            client = provisioner.connect(timeout=6)
-            stdin, stdout, stderr = client.exec_command("[ -f /usr/local/bin/dbs-api ] && echo 'exists'")
-            if stdout.read().decode().strip() == "exists":
-                if password:
-                    client.exec_command(f"echo '{username}:{password}' | sudo tee /etc/dbskiosk/api_auth.conf >/dev/null && sudo chmod 600 /etc/dbskiosk/api_auth.conf")
-                
-                pkg_api = os.path.join(os.path.dirname(__file__), "..", "package", "files", "dbs-api.py")
-                if not os.path.exists(pkg_api):
-                    pkg_api = "/app/package/files/dbs-api.py"
-                if os.path.exists(pkg_api):
-                    sftp = client.open_sftp()
-                    sftp.put(pkg_api, "/tmp/dbs-api.py")
-                    sftp.close()
-                    client.exec_command(f"echo '{password}' | sudo -S cp /tmp/dbs-api.py /usr/local/bin/dbs-api && echo '{password}' | sudo -S chmod 755 /usr/local/bin/dbs-api && echo '{password}' | sudo -S systemctl restart dbs-api.service")
-                pkg_hc = os.path.join(os.path.dirname(__file__), "..", "package", "files", "dbs-healthcheck.sh")
-                if not os.path.exists(pkg_hc):
-                    pkg_hc = "/app/package/files/dbs-healthcheck.sh"
-                if os.path.exists(pkg_hc):
-                    sftp = client.open_sftp()
-                    sftp.put(pkg_hc, "/tmp/dbs-healthcheck.sh")
-                    sftp.close()
-                    client.exec_command(f"echo '{password}' | sudo -S cp /tmp/dbs-healthcheck.sh /usr/local/bin/dbs-healthcheck && echo '{password}' | sudo -S chmod 755 /usr/local/bin/dbs-healthcheck")
-            client.close()
-        except Exception:
-            pass
+        # Automatische Aktualisierung des dbs-api Dienstes auf dem Zielsystem
+        deploy_latest_dbs_api(device)
 
     return jsonify(result)
 
@@ -739,6 +714,157 @@ def download_pi_config_log():
             return jsonify({"error": f"Konfigurationslog nicht verfügbar: {e}"}), 404
 
     return jsonify({"error": "Konfigurationslog nicht verfügbar"}), 404
+
+
+def deploy_latest_dbs_api(device):
+    """
+    Deploys the latest dbs-api and dbs-healthcheck onto the target Pi via SSH/SFTP
+    and restarts dbs-api.service.
+    """
+    host = device.get("host")
+    port = int(device.get("port", 22))
+    username = device.get("username", "dbsadmin")
+    password = device.get("password", "")
+
+    if not host or not password:
+        return {"success": False, "error": "IP-Adresse oder Passwort fehlt"}
+
+    try:
+        import paramiko
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(hostname=host, port=port, username=username, password=password, timeout=8)
+
+        # Update api_auth.conf
+        client.exec_command(f"echo '{password}' | sudo -S sh -c \"echo '{username}:{password}' > /etc/dbskiosk/api_auth.conf && chmod 600 /etc/dbskiosk/api_auth.conf\"")
+
+        # Find dbs-api.py
+        candidates_api = [
+            os.path.join(os.path.dirname(__file__), "..", "package", "files", "dbs-api.py"),
+            os.path.join(os.path.dirname(__file__), "..", "..", "files", "dbs-api.py"),
+            "/app/package/files/dbs-api.py"
+        ]
+        pkg_api = next((p for p in candidates_api if os.path.exists(p)), None)
+
+        if pkg_api:
+            sftp = client.open_sftp()
+            sftp.put(pkg_api, "/tmp/dbs-api.py")
+            sftp.close()
+            client.exec_command(f"echo '{password}' | sudo -S cp /tmp/dbs-api.py /usr/local/bin/dbs-api && echo '{password}' | sudo -S chmod 755 /usr/local/bin/dbs-api && echo '{password}' | sudo -S systemctl restart dbs-api.service")
+
+        # Find dbs-healthcheck.sh
+        candidates_hc = [
+            os.path.join(os.path.dirname(__file__), "..", "package", "files", "dbs-healthcheck.sh"),
+            os.path.join(os.path.dirname(__file__), "..", "..", "files", "dbs-healthcheck.sh"),
+            "/app/package/files/dbs-healthcheck.sh"
+        ]
+        pkg_hc = next((p for p in candidates_hc if os.path.exists(p)), None)
+        if pkg_hc:
+            sftp = client.open_sftp()
+            sftp.put(pkg_hc, "/tmp/dbs-healthcheck.sh")
+            sftp.close()
+            client.exec_command(f"echo '{password}' | sudo -S cp /tmp/dbs-healthcheck.sh /usr/local/bin/dbs-healthcheck && echo '{password}' | sudo -S chmod 755 /usr/local/bin/dbs-healthcheck")
+
+        client.close()
+        return {"success": True, "message": f"dbs-api Hintergrunddienst auf '{device.get('name')}' ({host}) erfolgreich aktualisiert und neu gestartet."}
+    except Exception as e:
+        return {"success": False, "error": f"SSH Fehler beim Aktualisieren von dbs-api: {str(e)}"}
+
+
+@app.route("/api/pi/update-agent", methods=["POST"])
+def update_pi_agent():
+    """Uploads the latest dbs-api and restarts the service on the target Raspberry Pi."""
+    fleet = load_fleet_data()
+    data = request.get_json(silent=True) or {}
+    dev_id = data.get("device_id") or request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+    res = deploy_latest_dbs_api(device)
+    return jsonify(res), (200 if res.get("success") else 500)
+
+
+@app.route("/api/pi/download-comm-log")
+def download_pi_comm_log():
+    """Download the recent communication log from the Raspberry Pi (default: last 10 minutes)."""
+    fleet = load_fleet_data()
+    dev_id = request.args.get("device_id")
+    minutes = request.args.get("minutes", "10")
+    try:
+        minutes_int = int(minutes)
+    except Exception:
+        minutes_int = 10
+
+    device = get_active_device(fleet, dev_id)
+    host = device.get("host")
+    port = int(device.get("port", 22))
+    username = device.get("username", "dbsadmin")
+    password = device.get("password", "")
+    api_port = int(device.get("api_port", 8088))
+
+    if not host:
+        return jsonify({"error": "Keine IP-Adresse konfiguriert"}), 400
+
+    filename = f"dbskiosk-comm-{device.get('id', 'kiosk')}-last{minutes_int}min.log"
+
+    # 1. Versuch: Über REST-API (Port 8088)
+    try:
+        url = f"http://{host}:{api_port}/api/logs/communication?minutes={minutes_int}"
+        resp = requests.get(url, auth=get_pi_auth(device), timeout=5)
+        if resp.status_code == 200 and resp.content:
+            return Response(
+                resp.content,
+                mimetype="text/plain; charset=utf-8",
+                headers={"Content-Disposition": f"inline; filename={filename}"}
+            )
+    except Exception:
+        pass
+
+    # 2. Versuch: Über SSH/SFTP direkt von /var/log/dbskiosk-comm.log
+    if password:
+        try:
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(hostname=host, port=port, username=username, password=password, timeout=6)
+            sftp = client.open_sftp()
+            full_log = ""
+            try:
+                with sftp.open("/var/log/dbskiosk-comm.log", "r") as f:
+                    full_log = f.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            sftp.close()
+            client.close()
+
+            if full_log:
+                if minutes_int > 0:
+                    from datetime import datetime, timedelta
+                    cutoff = datetime.now() - timedelta(minutes=minutes_int)
+                    filtered_lines = []
+                    for line in full_log.splitlines():
+                        if line.startswith("[") and len(line) >= 21 and line[20] == "]":
+                            try:
+                                t = datetime.strptime(line[1:20], "%Y-%m-%d %H:%M:%S")
+                                if t >= cutoff:
+                                    filtered_lines.append(line)
+                            except Exception:
+                                filtered_lines.append(line)
+                        else:
+                            if filtered_lines:
+                                filtered_lines.append(line)
+                    out_text = f"=== dbsKioskPi Kommunikationsprotokoll (SSH-Fallback, letzte {minutes_int} Minuten) ===\n\n"
+                    out_text += "\n".join(filtered_lines) if filtered_lines else f"(Keine Einträge in den letzten {minutes_int} Minuten gefunden)\n"
+                else:
+                    out_text = full_log
+
+                return Response(
+                    out_text.encode("utf-8"),
+                    mimetype="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": f"inline; filename={filename}"}
+                )
+        except Exception:
+            pass
+
+    return jsonify({"error": f"Kommunikationslog der letzten {minutes_int} Minuten für '{device.get('name')}' nicht verfügbar"}), 404
 
 
 @app.route("/api/pi/healthcheck")

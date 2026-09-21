@@ -811,9 +811,10 @@ def deploy_latest_dbs_api(device):
             f"chmod 600 /etc/dbskiosk/api_auth.conf && "
             f"cp /tmp/dbs-api.py /usr/local/bin/dbs-api && "
             f"chmod 755 /usr/local/bin/dbs-api && "
+            f"mkdir -p /run/dbskiosk && "
             f"touch /var/log/dbskiosk-comm.log && "
             f"chmod 666 /var/log/dbskiosk-comm.log && "
-            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.6.1 aktualisiert (Mauszeiger & Tastatursperre, CEC-Fix)\" >> /var/log/dbskiosk-comm.log"
+            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.6.2 aktualisiert (SD-Kartenschutz, RAM-Logging, CEC-Fix)\" >> /var/log/dbskiosk-comm.log"
         )
         if pkg_hc:
             install_script += " && cp /tmp/dbs-healthcheck.sh /usr/local/bin/dbs-healthcheck && chmod 755 /usr/local/bin/dbs-healthcheck"
@@ -828,10 +829,13 @@ def deploy_latest_dbs_api(device):
         if pkg_cec:
             install_script += " && cp /tmp/cec-control.sh /usr/local/bin/dbs-cec && chmod 755 /usr/local/bin/dbs-cec"
 
-        # HDMI Standby Keepalive & Hotplug Fix (cmdline.txt & config.txt)
+        # HDMI Standby Keepalive & Hotplug Fix (cmdline.txt & config.txt) + SD-Kartenschutz (journald volatile)
         install_script += (
             " && ([ -f /boot/firmware/cmdline.txt ] && (grep -q 'video=HDMI-A-1:' /boot/firmware/cmdline.txt || sed -i 's/$/ video=HDMI-A-1:1920x1080@60D/' /boot/firmware/cmdline.txt) || true)"
             " && ([ -f /boot/firmware/config.txt ] && (grep -q 'hdmi_force_hotplug=1' /boot/firmware/config.txt || sed -i '/\\[all\\]/a hdmi_force_hotplug=1\\nhdmi_group=1\\nhdmi_mode=16' /boot/firmware/config.txt) || true)"
+            " && mkdir -p /etc/systemd/journald.conf.d /run/dbskiosk"
+            " && printf '[Journal]\\nStorage=volatile\\nRuntimeMaxUse=32M\\n' > /etc/systemd/journald.conf.d/00-dbskiosk-volatile.conf"
+            " && (systemctl restart systemd-journald 2>/dev/null || true)"
             " && printf '[Service]\\nEnvironment=XCURSOR_THEME=\"\"\\nEnvironment=XCURSOR_SIZE=0\\nInaccessiblePaths=/usr/share/icons\\n' > /etc/systemd/system/kiosk.service.d/hide-cursor.conf"
             " && chmod 644 /etc/systemd/system/kiosk.service.d/hide-cursor.conf"
             " && systemctl daemon-reload"

@@ -207,6 +207,13 @@ else
     check_status "Kiosk-Eingabesperre" 1 "Inaktiv (Eingabegeräte entsperrt)"
 fi
 
+# SD-Kartenschutz (RAM-Logging)
+if grep -q "Storage=volatile" /etc/systemd/journald.conf.d/*.conf 2>/dev/null || grep -q "^Storage=volatile" /etc/systemd/journald.conf 2>/dev/null; then
+    check_status "SD-Kartenschutz" 0 "Aktiv (RAM-Logging: journald volatile & /tmp tmpfs)"
+else
+    check_status "SD-Kartenschutz" 0 "Standard (Persistent logging auf SD-Karte)"
+fi
+
 if command -v cec-client >/dev/null 2>&1; then
     check_status "CEC Client Tool" 0 "cec-utils installiert (/usr/bin/cec-client)"
 else

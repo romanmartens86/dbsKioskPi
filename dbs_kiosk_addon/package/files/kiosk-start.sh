@@ -35,7 +35,12 @@ fi
 
 # Bereite Cache- und Profildirektorien im RAM / tmp vor
 CACHE_DIR="/tmp/chromium-cache"
-PROFILE_DIR="${HOME:-/tmp}/.config/dbskiosk-browser"
+if [ "${SD_PROTECTION:-true}" = "true" ]; then
+    # SD-Schutz: Browser-Profil im RAM (/tmp) verhindert Schreibzugriffe auf die SD-Karte
+    PROFILE_DIR="/tmp/dbskiosk-browser"
+else
+    PROFILE_DIR="${HOME:-/tmp}/.config/dbskiosk-browser"
+fi
 mkdir -p "$CACHE_DIR" "$PROFILE_DIR"
 
 # Verhindere 'Wiederherstellen'-Meldungen nach unsauberem Herunterfahren
@@ -63,6 +68,8 @@ CHROMIUM_ARGS=(
     "--password-store=basic"
     "--touch-events=enabled"
     "--disable-pinch"
+    "--disable-session-storage"
+    "--media-cache-size=16777216"
 )
 
 # Optionale zusätzliche Benutzer-Flags anhängen

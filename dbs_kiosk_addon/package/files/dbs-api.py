@@ -36,15 +36,66 @@ INSTALL_LOG_FILE = "/var/log/dbskiosk-install.log"
 CONFIG_LOG_FILE = "/var/log/dbskiosk-config.log"
 HEALTHCHECK_LOG_FILE = "/var/log/dbskiosk-healthcheck.log"
 COMM_LOG_FILE = "/var/log/dbskiosk-comm.log"
-COMM_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+COMM_LOG_RAM_FILE = "/run/dbskiosk/dbskiosk-comm.log"
+COMM_LOG_MAX_BYTES = 2 * 1024 * 1024  # 2 MB in RAM
+
+
+def read_config():
+    """Reads key-value config from kiosk.conf."""
+    cfg = {
+        "KIOSK_URL": "https://dbs.edupage.org/infoscreen/7?scaletowidth=1920",
+        "CEC_ENABLED": "true",
+        "CEC_ON_TIME": "07:00",
+        "CEC_OFF_TIME": "19:00",
+        "BELL_VOLUME": "100",
+        "SD_PROTECTION": "true"
+    }
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        cfg[k.strip()] = v.strip().strip('"').strip("'")
+        except Exception as e:
+            print(f"[WARN] Error reading config: {e}", file=sys.stderr)
+    return cfg
+
+
+load_config = read_config
+
+
+def get_comm_log_path():
+    """Returns RAM path (/run/dbskiosk) if SD_PROTECTION is active, else disk path."""
+    cfg = read_config()
+    sd_protect = cfg.get("SD_PROTECTION", "true").lower() in ("true", "1", "yes")
+    if sd_protect and os.path.exists("/run"):
+        try:
+            os.makedirs("/run/dbskiosk", exist_ok=True)
+            return COMM_LOG_RAM_FILE
+        except Exception:
+            pass
+    return COMM_LOG_FILE
 
 
 def log_comm_event(method, path, client_ip, status_code, details="", duration_ms=None):
     """
-    Appends a timestamped communication log entry to /var/log/dbskiosk-comm.log.
-    Rotates the log file if it exceeds COMM_LOG_MAX_BYTES.
+    Appends a timestamped communication log entry.
+    When SD_PROTECTION is active, logs are kept in RAM (/run/dbskiosk) and high-frequency
+    routine status/playlist polling is filtered to prevent flash wear.
     """
     try:
+        cfg = read_config()
+        sd_protect = cfg.get("SD_PROTECTION", "true").lower() in ("true", "1", "yes")
+
+        # Filter out high-frequency polling GET requests if successful to preserve SD card / memory
+        if sd_protect and method == "GET" and status_code < 400:
+            clean_path = path.rstrip("/")
+            if clean_path in ("/api/status", "/api/kiosk/playlist", "/health", "/favicon.ico"):
+                return
+
+        target_file = get_comm_log_path()
         now = datetime.now()
         ts = now.strftime("%Y-%m-%d %H:%M:%S")
         dur_str = f" [{duration_ms:.1f}ms]" if duration_ms is not None else ""
@@ -59,16 +110,16 @@ def log_comm_event(method, path, client_ip, status_code, details="", duration_ms
         entry += "\n"
 
         # Rotation
-        if os.path.exists(COMM_LOG_FILE) and os.path.getsize(COMM_LOG_FILE) > COMM_LOG_MAX_BYTES:
+        if os.path.exists(target_file) and os.path.getsize(target_file) > COMM_LOG_MAX_BYTES:
             try:
-                old_file = COMM_LOG_FILE + ".1"
+                old_file = target_file + ".1"
                 if os.path.exists(old_file):
                     os.remove(old_file)
-                os.rename(COMM_LOG_FILE, old_file)
+                os.rename(target_file, old_file)
             except Exception:
                 pass
 
-        with open(COMM_LOG_FILE, "a", encoding="utf-8") as f:
+        with open(target_file, "a", encoding="utf-8") as f:
             f.write(entry)
     except Exception:
         pass
@@ -76,18 +127,18 @@ def log_comm_event(method, path, client_ip, status_code, details="", duration_ms
 
 def get_recent_comm_logs(minutes=10):
     """
-    Extracts entries from the last `minutes` from COMM_LOG_FILE (and COMM_LOG_FILE.1).
+    Extracts entries from the last `minutes` from active and rotated comm log files.
     """
-    if not os.path.exists(COMM_LOG_FILE):
-        return f"Keine Kommunikationsprotokolle unter {COMM_LOG_FILE} vorhanden.\n"
+    target_file = get_comm_log_path()
+    candidate_files = [target_file + ".1", target_file]
+    if target_file != COMM_LOG_FILE and os.path.exists(COMM_LOG_FILE):
+        candidate_files.insert(0, COMM_LOG_FILE)
+
+    files_to_read = [f for f in candidate_files if os.path.exists(f)]
+    if not files_to_read:
+        return f"Keine Kommunikationsprotokolle unter {target_file} vorhanden.\n"
 
     try:
-        files_to_read = []
-        old_file = COMM_LOG_FILE + ".1"
-        if os.path.exists(old_file):
-            files_to_read.append(old_file)
-        files_to_read.append(COMM_LOG_FILE)
-
         lines = []
         for fp in files_to_read:
             try:
@@ -135,26 +186,6 @@ def log_config_event(action):
         pass
 
 
-def read_config():
-    """Reads key-value config from kiosk.conf."""
-    cfg = {
-        "KIOSK_URL": "https://dbs.edupage.org/infoscreen/7?scaletowidth=1920",
-        "CEC_ENABLED": "true",
-        "CEC_ON_TIME": "07:00",
-        "CEC_OFF_TIME": "19:00",
-        "BELL_VOLUME": "100"
-    }
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        cfg[k.strip()] = v.strip().strip('"').strip("'")
-        except Exception as e:
-            print(f"[WARN] Error reading config: {e}", file=sys.stderr)
-    return cfg
 
 
 def save_config_value(key, value):
@@ -452,10 +483,11 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
 
             data = {
                 "service": "dbsKioskPi",
-                "version": "1.6.1",
+                "version": "1.6.2",
                 "kiosk_service": kiosk_active,
                 "screen_power": cec_power,
                 "cec_enabled": cfg.get("CEC_ENABLED", "true") == "true",
+                "sd_protection": cfg.get("SD_PROTECTION", "true") == "true",
                 "cec_on_time": cfg.get("CEC_ON_TIME", "07:00"),
                 "cec_off_time": cfg.get("CEC_OFF_TIME", "19:00"),
                 "kiosk_url": cfg.get("KIOSK_URL", ""),
@@ -710,6 +742,18 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                                 duration_ms=(time.time()-t0)*1000)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500, log_summary=f"Fehler bei Eingabeschnittstelle: {e}", duration_ms=(time.time()-t0)*1000)
+            return
+
+        elif path == "/api/settings/sd_protection":
+            body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+            try:
+                req = json.loads(body)
+            except Exception:
+                req = {}
+            enable = req.get("enabled", True)
+            val_str = "true" if enable else "false"
+            save_config_value("SD_PROTECTION", val_str)
+            self._send_json({"success": True, "sd_protection": enable}, log_summary=f"SD-Kartenschutz geändert auf: {val_str}", duration_ms=(time.time()-t0)*1000)
             return
 
         elif path == "/api/kiosk/restart":

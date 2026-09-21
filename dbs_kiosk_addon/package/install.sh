@@ -194,6 +194,19 @@ systemctl restart zramswap.service 2>/dev/null || true
 log_success "zramswap konfiguriert und neu gestartet."
 
 # ------------------------------------------------------------------------------
+# 4b. SD-Karten-Schutz (RAM-Logging, journald Storage=volatile)
+# ------------------------------------------------------------------------------
+log_info "Konfiguriere SD-Karten-Schutz (Systemd-Journal im RAM, Schutz vor Flash-Wear)..."
+mkdir -p /etc/systemd/journald.conf.d /run/dbskiosk
+cat << 'EOF' > /etc/systemd/journald.conf.d/00-dbskiosk-volatile.conf
+[Journal]
+Storage=volatile
+RuntimeMaxUse=32M
+EOF
+systemctl restart systemd-journald 2>/dev/null || true
+log_success "Systemd-Journal auf RAM (Storage=volatile, max 32MB) umgestellt."
+
+# ------------------------------------------------------------------------------
 # 5. Kiosk-Konfiguration & Hilfsskripte
 # ------------------------------------------------------------------------------
 log_info "Erstelle Konfigurationsverzeichnisse /etc/dbskiosk und /var/lib/dbskiosk/sounds..."

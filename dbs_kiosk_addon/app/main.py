@@ -917,19 +917,37 @@ def get_kiosk_status():
 def handle_playlist():
     fleet = load_fleet_data()
     dev_id = request.args.get("device_id")
+    payload = []
     if request.method == "POST":
-        data = request.get_json(silent=True) or {}
-        dev_id = data.get("device_id") or dev_id
+        data = request.get_json(silent=True)
+        if isinstance(data, dict):
+            dev_id = data.get("device_id") or dev_id
+            payload = data.get("playlist", data)
+        elif isinstance(data, list):
+            payload = data
+        else:
+            payload = []
     device = get_active_device(fleet, dev_id)
     base_url = get_pi_api_base(device)
     try:
         if request.method == "POST":
-            resp = requests.post(f"{base_url}/api/kiosk/playlist", json=request.get_json(silent=True) or {}, auth=get_pi_auth(device), timeout=8)
+            resp = requests.post(f"{base_url}/api/kiosk/playlist", json=payload, auth=get_pi_auth(device), timeout=8)
         else:
             resp = requests.get(f"{base_url}/api/kiosk/playlist", auth=get_pi_auth(device), timeout=4)
-        return Response(resp.content, status=resp.status_code, content_type="application/json")
+
+        try:
+            resp_data = resp.json()
+            return jsonify(resp_data), resp.status_code
+        except Exception:
+            if resp.status_code == 200:
+                return jsonify({"success": True, "message": resp.text[:200]}), 200
+            else:
+                return jsonify({
+                    "success": False,
+                    "error": f"Display antwortete mit HTTP {resp.status_code}: {resp.text[:200]}"
+                }), resp.status_code
     except Exception as e:
-        return jsonify({"error": str(e)}), 503
+        return jsonify({"success": False, "error": str(e)}), 503
 
 
 @app.route("/api/bell/schedule", methods=["GET", "POST"])

@@ -550,8 +550,12 @@ async function loadPlaylist() {
   try {
     const res = await fetch(apiUrl(`/api/kiosk/playlist?device_id=${activeDeviceId}`));
     if (res.ok) {
-      playlistItems = await res.json();
-      if (!Array.isArray(playlistItems) || playlistItems.length === 0) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        playlistItems = data;
+      } else if (data && Array.isArray(data.playlist) && data.playlist.length > 0) {
+        playlistItems = data.playlist;
+      } else {
         playlistItems = [{ url: "https://dbs.edupage.org/infoscreen/7?scaletowidth=1920", duration: 30 }];
       }
     }
@@ -573,11 +577,11 @@ function renderPlaylist() {
     div.innerHTML = `
       <div class="form-group" style="flex: 3;">
         <label>Webseiten-URL #${index + 1}</label>
-        <input type="url" value="${item.url || ''}" onchange="playlistItems[${index}].url = this.value" placeholder="https://...">
+        <input type="url" value="${item.url || ''}" oninput="playlistItems[${index}].url = this.value" onchange="playlistItems[${index}].url = this.value" placeholder="https://...">
       </div>
       <div class="form-group" style="flex: 1;">
         <label>Anzeigedauer (Sekunden)</label>
-        <input type="number" min="5" max="3600" value="${item.duration || 30}" onchange="playlistItems[${index}].duration = parseInt(this.value)">
+        <input type="number" min="5" max="3600" value="${item.duration || 30}" oninput="playlistItems[${index}].duration = parseInt(this.value, 10) || 30" onchange="playlistItems[${index}].duration = parseInt(this.value, 10) || 30">
       </div>
       <div style="margin-bottom: 2px;">
         <button class="btn btn-danger" onclick="removePlaylistItem(${index})" title="Entfernen">🗑️</button>
@@ -602,6 +606,16 @@ function removePlaylistItem(idx) {
 }
 
 async function savePlaylist() {
+  // Synchronisiere Eingaben aus dem DOM
+  const urlInputs = document.querySelectorAll('#playlist-container input[type="url"]');
+  const durInputs = document.querySelectorAll('#playlist-container input[type="number"]');
+  urlInputs.forEach((inp, i) => {
+    if (playlistItems[i]) playlistItems[i].url = inp.value.trim();
+  });
+  durInputs.forEach((inp, i) => {
+    if (playlistItems[i]) playlistItems[i].duration = parseInt(inp.value, 10) || 30;
+  });
+
   showToast('Speichere Playlist auf diesem Display...');
   try {
     const res = await fetch(apiUrl(`/api/kiosk/playlist?device_id=${activeDeviceId}`), {
@@ -609,14 +623,20 @@ async function savePlaylist() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(playlistItems)
     });
-    const data = await res.json();
-    if (data.success) {
+    let data;
+    try {
+      data = await res.json();
+    } catch (e) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Ungültige Server-Antwort (HTTP ${res.status}): ${text.slice(0, 150)}`);
+    }
+    if (res.ok && data && (data.success !== false)) {
       showToast('Playlist gespeichert und Display neu geladen!');
     } else {
-      showToast(`Fehler: ${data.error}`, true);
+      showToast(`Fehler: ${(data && data.error) || 'Speichern fehlgeschlagen'}`, true);
     }
   } catch (err) {
-    showToast(`Fehler beim Speichern: ${err}`, true);
+    showToast(`Fehler beim Speichern: ${err.message || err}`, true);
   }
 }
 

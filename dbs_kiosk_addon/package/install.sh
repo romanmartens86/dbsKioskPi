@@ -204,6 +204,7 @@ Storage=volatile
 RuntimeMaxUse=32M
 EOF
 systemctl restart systemd-journald 2>/dev/null || true
+systemctl enable tmp.mount 2>/dev/null || true
 log_success "Systemd-Journal auf RAM (Storage=volatile, max 32MB) umgestellt."
 
 # ------------------------------------------------------------------------------

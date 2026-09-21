@@ -12,6 +12,10 @@ PAMName=login
 Environment=XDG_SESSION_TYPE=wayland
 Environment=XDG_RUNTIME_DIR=/run/user/@KIOSK_UID@
 Environment=WLR_SCENE_DISABLE_DIRECT_SCANOUT=1
+Environment=XCURSOR_THEME=""
+Environment=XCURSOR_SIZE=0
+# Mauszeiger-Icons für Cage unzugänglich machen, um Cursor-Rendering zu unterdrücken
+InaccessiblePaths=/usr/share/icons
 WorkingDirectory=/home/@KIOSK_USER@
 ExecStart=/usr/local/bin/dbs-kiosk
 Restart=always

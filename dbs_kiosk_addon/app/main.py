@@ -775,6 +775,10 @@ def deploy_latest_dbs_api(device):
         return {"success": False, "error": "dbs-api.py Quelldatei wurde im Add-on Paket nicht gefunden."}
 
     pkg_hc = find_package_file("files/dbs-healthcheck.sh")
+    pkg_kiosk = find_package_file("files/kiosk-start.sh")
+    pkg_cycler = find_package_file("files/kiosk-cycler.html")
+    pkg_input = find_package_file("files/dbs-input.sh")
+    pkg_rules = find_package_file("files/99-dbskiosk-input.rules")
 
     try:
         import paramiko
@@ -787,25 +791,47 @@ def deploy_latest_dbs_api(device):
         sftp.put(pkg_api, "/tmp/dbs-api.py")
         if pkg_hc:
             sftp.put(pkg_hc, "/tmp/dbs-healthcheck.sh")
+        if pkg_kiosk:
+            sftp.put(pkg_kiosk, "/tmp/kiosk-start.sh")
+        if pkg_cycler:
+            sftp.put(pkg_cycler, "/tmp/kiosk-cycler.html")
+        if pkg_input:
+            sftp.put(pkg_input, "/tmp/dbs-input.sh")
+        if pkg_rules:
+            sftp.put(pkg_rules, "/tmp/99-dbskiosk-input.rules")
         sftp.close()
 
         # 2. Execute installation script as root and wait for completion
         install_script = (
-            f"mkdir -p /etc/dbskiosk /var/log && "
+            f"mkdir -p /etc/dbskiosk /var/log /var/lib/dbskiosk /etc/udev/rules.d /etc/systemd/system/kiosk.service.d && "
             f"echo '{username}:{password}' > /etc/dbskiosk/api_auth.conf && "
             f"chmod 600 /etc/dbskiosk/api_auth.conf && "
             f"cp /tmp/dbs-api.py /usr/local/bin/dbs-api && "
             f"chmod 755 /usr/local/bin/dbs-api && "
             f"touch /var/log/dbskiosk-comm.log && "
             f"chmod 666 /var/log/dbskiosk-comm.log && "
-            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbs-api Dienst auf Version 1.5.0 aktualisiert und neu gestartet\" >> /var/log/dbskiosk-comm.log && "
-            f"systemctl daemon-reload && "
-            f"systemctl restart dbs-api.service"
+            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.6.0 aktualisiert (Mauszeiger & Tastatursperre)\" >> /var/log/dbskiosk-comm.log"
         )
         if pkg_hc:
             install_script += " && cp /tmp/dbs-healthcheck.sh /usr/local/bin/dbs-healthcheck && chmod 755 /usr/local/bin/dbs-healthcheck"
+        if pkg_kiosk:
+            install_script += " && cp /tmp/kiosk-start.sh /usr/local/bin/dbs-kiosk && chmod 755 /usr/local/bin/dbs-kiosk"
+        if pkg_cycler:
+            install_script += " && cp /tmp/kiosk-cycler.html /var/lib/dbskiosk/kiosk-cycler.html && chmod 644 /var/lib/dbskiosk/kiosk-cycler.html"
+        if pkg_input:
+            install_script += " && cp /tmp/dbs-input.sh /usr/local/bin/dbs-input && chmod 755 /usr/local/bin/dbs-input"
+        if pkg_rules:
+            install_script += " && cp /tmp/99-dbskiosk-input.rules /etc/udev/rules.d/99-dbskiosk-input.rules && chmod 644 /etc/udev/rules.d/99-dbskiosk-input.rules && udevadm control --reload-rules && udevadm trigger"
 
-        status, out, err = ssh_run_sudo(client, install_script, password=password, timeout=25)
+        install_script += (
+            " && printf '[Service]\\nEnvironment=XCURSOR_THEME=\"\"\\nEnvironment=XCURSOR_SIZE=0\\nInaccessiblePaths=/usr/share/icons\\n' > /etc/systemd/system/kiosk.service.d/hide-cursor.conf"
+            " && chmod 644 /etc/systemd/system/kiosk.service.d/hide-cursor.conf"
+            " && systemctl daemon-reload"
+            " && systemctl restart dbs-api.service"
+            " && (systemctl is-active --quiet kiosk.service && systemctl restart kiosk.service || true)"
+        )
+
+        status, out, err = ssh_run_sudo(client, install_script, password=password, timeout=30)
         if status != 0:
             client.close()
             return {"success": False, "error": f"Fehler beim Aktualisieren (Exit {status}): {err or out}"}
@@ -819,7 +845,7 @@ def deploy_latest_dbs_api(device):
             return {"success": False, "error": f"dbs-api.service ist nach Neustart {is_active}: {journal}"}
 
         client.close()
-        return {"success": True, "message": f"dbs-api Hintergrunddienst auf '{device.get('name')}' ({host}) erfolgreich aktualisiert und aktiv!"}
+        return {"success": True, "message": f"dbsKioskPi Komponenten auf '{device.get('name')}' ({host}) erfolgreich aktualisiert (Mauszeiger ausgeblendet, Tastatur gesperrt)!"}
     except Exception as e:
         return {"success": False, "error": f"SSH Fehler beim Aktualisieren von dbs-api: {str(e)}"}
 
@@ -1179,6 +1205,27 @@ def handle_playlist():
                     "success": False,
                     "error": f"Display antwortete mit HTTP {resp.status_code}: {resp.text[:200]}"
                 }), resp.status_code
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 503
+
+
+@app.route("/api/kiosk/input", methods=["GET", "POST"])
+def handle_kiosk_input():
+    fleet = load_fleet_data()
+    dev_id = request.args.get("device_id")
+    payload = {}
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        dev_id = data.get("device_id") or dev_id
+        payload = data
+    device = get_active_device(fleet, dev_id)
+    base_url = get_pi_api_base(device)
+    try:
+        if request.method == "POST":
+            resp = requests.post(f"{base_url}/api/kiosk/input", json=payload, auth=get_pi_auth(device), timeout=8)
+        else:
+            resp = requests.get(f"{base_url}/api/kiosk/input", auth=get_pi_auth(device), timeout=4)
+        return Response(resp.content, status=resp.status_code, content_type="application/json")
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 503
 

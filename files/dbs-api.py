@@ -452,13 +452,18 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
 
             data = {
                 "service": "dbsKioskPi",
-                "version": "1.4.2",
+                "version": "1.6.0",
                 "kiosk_service": kiosk_active,
                 "screen_power": cec_power,
                 "cec_enabled": cfg.get("CEC_ENABLED", "true") == "true",
                 "cec_on_time": cfg.get("CEC_ON_TIME", "07:00"),
                 "cec_off_time": cfg.get("CEC_OFF_TIME", "19:00"),
                 "kiosk_url": cfg.get("KIOSK_URL", ""),
+                "input_lock": {
+                    "block_keyboard": cfg.get("BLOCK_KEYBOARD", "true") == "true",
+                    "block_mouse": cfg.get("BLOCK_MOUSE", "true") == "true",
+                    "rules_active": os.path.exists("/etc/udev/rules.d/99-dbskiosk-input.rules")
+                },
                 "bell": {
                     "sound_exists": os.path.exists(BELL_PATH),
                     "sound_size_bytes": os.path.getsize(BELL_PATH) if os.path.exists(BELL_PATH) else 0,
@@ -466,6 +471,15 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                 }
             }
             self._send_json(data, log_summary=f"Live-Status (Kiosk: {kiosk_active}, CEC: {cec_power})", duration_ms=(time.time()-t0)*1000)
+            return
+
+        elif path == "/api/kiosk/input":
+            cfg = read_config()
+            self._send_json({
+                "block_keyboard": cfg.get("BLOCK_KEYBOARD", "true") == "true",
+                "block_mouse": cfg.get("BLOCK_MOUSE", "true") == "true",
+                "rules_active": os.path.exists("/etc/udev/rules.d/99-dbskiosk-input.rules")
+            }, duration_ms=(time.time()-t0)*1000)
             return
 
         elif path == "/api/bell/download":
@@ -675,6 +689,27 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "count": len(schedule)}, log_summary=f"Glocken-Zeitplan aktualisiert ({len(schedule)} Einträge)", duration_ms=(time.time()-t0)*1000)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500, log_summary=f"Fehler bei Glocken-Zeitplan: {e}", duration_ms=(time.time()-t0)*1000)
+            return
+
+        elif path == "/api/kiosk/input":
+            body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+            try:
+                req = json.loads(body)
+                block_kbd = req.get("block_keyboard")
+                block_mouse = req.get("block_mouse")
+                if block_kbd is not None:
+                    save_config_value("BLOCK_KEYBOARD", "true" if block_kbd else "false")
+                if block_mouse is not None:
+                    save_config_value("BLOCK_MOUSE", "true" if block_mouse else "false")
+
+                if os.path.exists("/usr/local/bin/dbs-input"):
+                    subprocess.Popen(["/usr/local/bin/dbs-input", "apply"])
+
+                self._send_json({"success": True, "block_keyboard": block_kbd, "block_mouse": block_mouse},
+                                log_summary=f"Eingabeschnittstelle geändert (Tastatursperre: {block_kbd}, Mauszeigersperre: {block_mouse})",
+                                duration_ms=(time.time()-t0)*1000)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500, log_summary=f"Fehler bei Eingabeschnittstelle: {e}", duration_ms=(time.time()-t0)*1000)
             return
 
         elif path == "/api/kiosk/restart":

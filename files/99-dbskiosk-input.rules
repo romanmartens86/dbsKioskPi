@@ -1,0 +1,13 @@
+# ==============================================================================
+# dbsKioskPi - Input Device Lock Rules
+# Locks keyboard and mouse input devices from Cage/Wayland compositor
+# SSH (Port 22) and HDMI-CEC are NOT affected!
+# ==============================================================================
+
+# Block physical keyboards from delivering events to Cage/Chromium
+ACTION!="remove", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+ACTION!="remove", KERNEL=="event*", ENV{ID_INPUT_KEY}=="1", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+
+# Block physical mice and pointing sticks (hides cursor and prevents clicks)
+ACTION!="remove", KERNEL=="event*", ENV{ID_INPUT_MOUSE}=="1", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+ACTION!="remove", KERNEL=="event*", ENV{ID_INPUT_POINTINGSTICK}=="1", ENV{LIBINPUT_IGNORE_DEVICE}="1"

@@ -960,10 +960,25 @@ async function fetchStatus() {
 
     const sKiosk = document.getElementById('stat-kiosk-service');
     const sPower = document.getElementById('stat-screen-power');
+    const sInput = document.getElementById('stat-input-lock');
     const sUrl = document.getElementById('stat-kiosk-url');
     if (sKiosk) sKiosk.innerText = data.kiosk_service || 'aktiv';
     if (sPower) sPower.innerText = (data.screen_power || 'unbekannt').toUpperCase();
     if (sUrl) sUrl.innerText = data.kiosk_url || '-';
+
+    const btnInput = document.getElementById('btn-toggle-input');
+    if (data.input_lock) {
+      const isLocked = data.input_lock.block_keyboard || data.input_lock.rules_active;
+      if (sInput) {
+        sInput.innerHTML = isLocked
+          ? '<span style="color: #22c55e;">🔒 Gesperrt / Unsichtbar</span>'
+          : '<span style="color: #eab308;">🔓 Entsperrt</span>';
+      }
+      if (btnInput) {
+        btnInput.innerHTML = isLocked ? '🔓 Eingabe entsperren' : '🔒 Eingabe sperren';
+        btnInput.setAttribute('data-locked', isLocked ? 'true' : 'false');
+      }
+    }
 
     if (data.bell) {
       const bellInfo = data.bell.sound_exists
@@ -983,8 +998,43 @@ async function fetchStatus() {
     badgeText.innerText = 'Offline (Nicht erreichbar)';
     const sKiosk = document.getElementById('stat-kiosk-service');
     const sPower = document.getElementById('stat-screen-power');
+    const sInput = document.getElementById('stat-input-lock');
     if (sKiosk) sKiosk.innerText = 'Offline';
     if (sPower) sPower.innerText = 'Offline';
+    if (sInput) sInput.innerText = '-';
+  }
+}
+
+async function toggleInputLock() {
+  const btn = document.getElementById('btn-toggle-input');
+  const isLocked = btn && btn.getAttribute('data-locked') === 'true';
+  const newLock = !isLocked;
+
+  const msg = newLock
+    ? 'Möchtest du Tastatur- und Mauseingaben sperren und den Mauszeiger ausblenden?'
+    : 'Möchtest du Tastatur- und Mauseingaben für Wartungsarbeiten am Kiosk entsperren?';
+
+  if (!confirm(msg)) return;
+
+  try {
+    const res = await fetch(apiUrl(`/api/kiosk/input?device_id=${activeDeviceId}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        device_id: activeDeviceId,
+        block_keyboard: newLock,
+        block_mouse: newLock
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      alert(newLock ? 'Eingabeschnittstelle erfolgreich gesperrt.' : 'Eingabeschnittstelle entsperrt.');
+      fetchStatus();
+    } else {
+      alert('Fehler: ' + (data.error || 'Aktion fehlgeschlagen'));
+    }
+  } catch (e) {
+    alert('Verbindungsfehler: ' + e.message);
   }
 }
 

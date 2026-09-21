@@ -222,6 +222,21 @@ log_info "Installiere CLI-Konfigurationstool (/usr/local/bin/dbs-config)..."
 cp "$SCRIPT_DIR/bin/dbs-config" /usr/local/bin/dbs-config
 chmod 755 /usr/local/bin/dbs-config
 
+# Eingabeschnittstellen-Tool & udev-Regeln (Tastatursperre & Mauszeiger-Ausblendung)
+if [ -f "$SCRIPT_DIR/files/dbs-input.sh" ]; then
+    log_info "Installiere Eingabeschnittstellen-Tool (/usr/local/bin/dbs-input)..."
+    cp "$SCRIPT_DIR/files/dbs-input.sh" /usr/local/bin/dbs-input
+    chmod 755 /usr/local/bin/dbs-input
+fi
+
+if [ -f "$SCRIPT_DIR/files/99-dbskiosk-input.rules" ]; then
+    log_info "Richte Kiosk-Eingabesperre via udev ein (99-dbskiosk-input.rules)..."
+    cp "$SCRIPT_DIR/files/99-dbskiosk-input.rules" /etc/udev/rules.d/99-dbskiosk-input.rules
+    chmod 644 /etc/udev/rules.d/99-dbskiosk-input.rules
+    udevadm control --reload-rules || true
+    udevadm trigger || true
+fi
+
 # ------------------------------------------------------------------------------
 # 6. Systemd-Dienste und Timer
 # ------------------------------------------------------------------------------
@@ -280,7 +295,8 @@ echo -e "${GREEN}===============================================================
 echo ""
 echo "Folgende Komponenten wurden eingerichtet:"
 echo " - Cage Wayland Compositor + Chromium Kiosk (/usr/local/bin/dbs-kiosk)"
-echo " - Autostart-Dienst auf TTY1 (kiosk.service)"
+echo " - Autostart-Dienst auf TTY1 (kiosk.service mit unsichtbarem Mauszeiger)"
+echo " - Kiosk-Eingabesperre (Tastatur- & Mauseingaben gesperrt via /usr/local/bin/dbs-input)"
 echo " - HDMI-CEC Automatisierung (07:00 Ein / 19:00 Aus)"
 echo " - zRAM Swap mit LZ4 Komprimierung (50% RAM)"
 echo " - Interaktives Konfigurationsmenü (Befehl: sudo dbs-config)"

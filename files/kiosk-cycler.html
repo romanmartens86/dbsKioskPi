@@ -4,12 +4,20 @@
   <meta charset="UTF-8">
   <title>dbsKioskPi Playlist Cycler</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    *, *::before, *::after, html, body {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      cursor: none !important;
+      user-select: none !important;
+      -webkit-user-select: none !important;
+    }
     html, body {
       width: 100vw;
       height: 100vh;
       overflow: hidden;
       background-color: #000;
+      cursor: none !important;
     }
     .kiosk-frame {
       position: absolute;
@@ -20,7 +28,8 @@
       border: none;
       opacity: 0;
       transition: opacity 0.8s ease-in-out;
-      pointer-events: auto;
+      pointer-events: none !important;
+      cursor: none !important;
     }
     .kiosk-frame.active {
       opacity: 1;
@@ -145,6 +154,8 @@
     }
 
     window.addEventListener('DOMContentLoaded', loadPlaylist);
+    window.addEventListener('contextmenu', e => e.preventDefault());
+    window.addEventListener('keydown', e => e.preventDefault());
   </script>
 </body>
 </html>

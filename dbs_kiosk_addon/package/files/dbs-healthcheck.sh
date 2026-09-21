@@ -200,6 +200,13 @@ else
     check_status "CEC Systemd Timer" 1 "Timer nicht vollständig aktiv"
 fi
 
+# Kiosk-Eingabesperre (Tastatur & Maus)
+if [ -f /etc/udev/rules.d/99-dbskiosk-input.rules ]; then
+    check_status "Kiosk-Eingabesperre" 0 "Aktiv (Tastatur & Maus gesperrt, Zeiger ausgeblendet)"
+else
+    check_status "Kiosk-Eingabesperre" 1 "Inaktiv (Eingabegeräte entsperrt)"
+fi
+
 if command -v cec-client >/dev/null 2>&1; then
     check_status "CEC Client Tool" 0 "cec-utils installiert (/usr/bin/cec-client)"
 else

@@ -281,6 +281,10 @@
             <p id="stat-screen-power" style="font-size: 18px; font-weight: 600;">-</p>
           </div>
           <div>
+            <span style="font-size: 13px; color: var(--text-secondary);">Eingabesperre / Zeiger</span>
+            <p id="stat-input-lock" style="font-size: 18px; font-weight: 600;">-</p>
+          </div>
+          <div>
             <span style="font-size: 13px; color: var(--text-secondary);">Aktive URL</span>
             <p id="stat-kiosk-url" style="font-size: 14px; font-weight: 500; word-break: break-all;">-</p>
           </div>
@@ -291,6 +295,7 @@
         </div>
         <div class="btn-group" style="margin-top: 16px;">
           <button class="btn btn-secondary" onclick="fetchStatus()">🔄 Status aktualisieren</button>
+          <button class="btn btn-secondary" id="btn-toggle-input" onclick="toggleInputLock()">🔒 Eingabeschnittstelle</button>
           <button class="btn btn-secondary" onclick="restartKioskService()">🔄 Kiosk-Browser neu starten</button>
           <button class="btn btn-secondary" onclick="rebootPiDevice()">🔁 Pi neu starten</button>
           <button class="btn btn-danger" onclick="shutdownPiDevice()">🛑 Pi herunterfahren</button>

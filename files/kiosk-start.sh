@@ -8,6 +8,10 @@ set -u
 # Wayland / wlroots Optimierung für Raspberry Pi
 export WLR_SCENE_DISABLE_DIRECT_SCANOUT=1
 
+# Mauszeiger auf Wayland / wlroots vollständig unsichtbar machen
+export XCURSOR_THEME=""
+export XCURSOR_SIZE=0
+
 # Lade Konfiguration, falls vorhanden
 CONFIG_FILE="/etc/dbskiosk/kiosk.conf"
 if [ -f "$CONFIG_FILE" ]; then
@@ -57,6 +61,8 @@ CHROMIUM_ARGS=(
     "--disable-features=Translate"
     "--disable-component-update"
     "--password-store=basic"
+    "--touch-events=enabled"
+    "--disable-pinch"
 )
 
 # Optionale zusätzliche Benutzer-Flags anhängen

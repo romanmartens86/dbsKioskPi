@@ -814,7 +814,7 @@ def deploy_latest_dbs_api(device):
             f"mkdir -p /run/dbskiosk && "
             f"touch /var/log/dbskiosk-comm.log && "
             f"chmod 666 /var/log/dbskiosk-comm.log && "
-            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.6.2 aktualisiert (SD-Kartenschutz, RAM-Logging, CEC-Fix)\" >> /var/log/dbskiosk-comm.log"
+            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.6.3 aktualisiert (WLR_LIBINPUT Fix, SD-Kartenschutz, RAM-Logging, CEC-Fix)\" >> /var/log/dbskiosk-comm.log"
         )
         if pkg_hc:
             install_script += " && cp /tmp/dbs-healthcheck.sh /usr/local/bin/dbs-healthcheck && chmod 755 /usr/local/bin/dbs-healthcheck"
@@ -836,11 +836,11 @@ def deploy_latest_dbs_api(device):
             " && mkdir -p /etc/systemd/journald.conf.d /run/dbskiosk"
             " && printf '[Journal]\\nStorage=volatile\\nRuntimeMaxUse=32M\\n' > /etc/systemd/journald.conf.d/00-dbskiosk-volatile.conf"
             " && (systemctl restart systemd-journald 2>/dev/null || true)"
-            " && printf '[Service]\\nEnvironment=XCURSOR_THEME=\"\"\\nEnvironment=XCURSOR_SIZE=0\\nInaccessiblePaths=/usr/share/icons\\n' > /etc/systemd/system/kiosk.service.d/hide-cursor.conf"
+            " && printf '[Service]\\nEnvironment=WLR_LIBINPUT_NO_DEVICES=1\\nEnvironment=XCURSOR_THEME=\"\"\\nEnvironment=XCURSOR_SIZE=0\\nInaccessiblePaths=/usr/share/icons\\n' > /etc/systemd/system/kiosk.service.d/hide-cursor.conf"
             " && chmod 644 /etc/systemd/system/kiosk.service.d/hide-cursor.conf"
             " && systemctl daemon-reload"
             " && systemctl restart dbs-api.service"
-            " && (systemctl is-active --quiet kiosk.service && systemctl restart kiosk.service || true)"
+            " && systemctl restart kiosk.service"
         )
 
         status, out, err = ssh_run_sudo(client, install_script, password=password, timeout=30)

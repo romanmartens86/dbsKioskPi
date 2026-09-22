@@ -12,6 +12,7 @@ PAMName=login
 Environment=XDG_SESSION_TYPE=wayland
 Environment=XDG_RUNTIME_DIR=/run/user/@KIOSK_UID@
 Environment=WLR_SCENE_DISABLE_DIRECT_SCANOUT=1
+Environment=WLR_LIBINPUT_NO_DEVICES=1
 Environment=XCURSOR_THEME=""
 Environment=XCURSOR_SIZE=0
 # Mauszeiger-Icons für Cage unzugänglich machen, um Cursor-Rendering zu unterdrücken

@@ -7,6 +7,8 @@ set -u
 
 # Wayland / wlroots Optimierung für Raspberry Pi
 export WLR_SCENE_DISABLE_DIRECT_SCANOUT=1
+# Erlaube Start ohne physische Eingabegeräte (bzw. bei gesperrter Tastatur/Maus via udev)
+export WLR_LIBINPUT_NO_DEVICES=1
 
 # Mauszeiger auf Wayland / wlroots vollständig unsichtbar machen
 export XCURSOR_THEME=""

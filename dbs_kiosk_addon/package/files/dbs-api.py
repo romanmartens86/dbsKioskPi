@@ -48,6 +48,7 @@ def read_config():
         "CEC_ON_TIME": "07:00",
         "CEC_OFF_TIME": "19:00",
         "BELL_VOLUME": "100",
+        "AUDIO_DEVICE": "default",
         "SD_PROTECTION": "true"
     }
     if os.path.exists(CONFIG_FILE):
@@ -186,6 +187,109 @@ def log_config_event(action):
         pass
 
 
+
+
+def get_audio_devices():
+    """
+    Discovers available ALSA playback devices on the Raspberry Pi.
+    Parses `aplay -l` and `/proc/asound/cards`.
+    Returns list of dicts with device IDs, names, and types.
+    """
+    devices = [
+        {"id": "default", "name": "⚙️ System-Standard (Automatisch)", "type": "default"}
+    ]
+
+    try:
+        res = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=5)
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                # Example: card 0: Headphones [bcm2835 Headphones], device 0: bcm2835 Headphones [bcm2835 Headphones]
+                #          card 1: vc4hdmi0 [vc4-hdmi-0], device 0: MAI PCM i2s-hifi-0 [MAI PCM i2s-hifi-0]
+                m = re.match(r"^card\s+(\d+):\s+([^,]+)\[([^\]]+)\],\s+device\s+(\d+):\s+([^\[]+)", line)
+                if m:
+                    card_num = m.group(1)
+                    card_id = m.group(2).strip()
+                    card_desc = m.group(3).strip()
+                    dev_num = m.group(4)
+                    dev_desc = m.group(5).strip()
+
+                    type_str = "other"
+                    name_str = f"Karte {card_num}: {card_desc}"
+                    id_lower = (card_id + " " + card_desc).lower()
+
+                    if "vc4-hdmi-0" in id_lower or "vc4hdmi0" in id_lower or ("hdmi" in id_lower and "0" in id_lower):
+                        type_str = "hdmi"
+                        name_str = "🔊 HDMI 0 (Fernseher / Monitor Port 1)"
+                    elif "vc4-hdmi-1" in id_lower or "vc4hdmi1" in id_lower or ("hdmi" in id_lower and "1" in id_lower):
+                        type_str = "hdmi"
+                        name_str = "🔊 HDMI 1 (Fernseher / Monitor Port 2)"
+                    elif "hdmi" in id_lower:
+                        type_str = "hdmi"
+                        name_str = f"🔊 HDMI (Karte {card_num}: {card_desc})"
+                    elif "headphone" in id_lower or "headset" in id_lower or "bcm2835" in id_lower:
+                        type_str = "analog"
+                        name_str = "🎧 3.5mm Klinke (Kopfhörer / Analog)"
+                    elif "usb" in id_lower:
+                        type_str = "usb"
+                        name_str = f"🔌 USB-Audio ({card_desc})"
+
+                    alsa_id = f"plughw:CARD={card_id},DEV={dev_num}"
+                    devices.append({
+                        "id": alsa_id,
+                        "card": card_num,
+                        "card_id": card_id,
+                        "device": int(dev_num),
+                        "name": name_str,
+                        "description": f"{card_desc} (Gerät {dev_num})",
+                        "type": type_str
+                    })
+    except Exception:
+        pass
+
+    # Fallback to /proc/asound/cards if only default is found
+    if len(devices) == 1 and os.path.exists("/proc/asound/cards"):
+        try:
+            with open("/proc/asound/cards", "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            for line in content.splitlines():
+                m = re.match(r"^\s*(\d+)\s+\[([^\]]+)\]:\s+(.+)$", line)
+                if m:
+                    card_num = m.group(1)
+                    card_id = m.group(2).strip()
+                    card_desc = m.group(3).strip()
+
+                    type_str = "other"
+                    name_str = f"Karte {card_num}: {card_desc}"
+                    id_lower = (card_id + " " + card_desc).lower()
+                    if "vc4-hdmi-0" in id_lower or "vc4hdmi0" in id_lower:
+                        type_str = "hdmi"
+                        name_str = "🔊 HDMI 0 (Fernseher / Monitor Port 1)"
+                    elif "vc4-hdmi-1" in id_lower or "vc4hdmi1" in id_lower:
+                        type_str = "hdmi"
+                        name_str = "🔊 HDMI 1 (Fernseher / Monitor Port 2)"
+                    elif "hdmi" in id_lower:
+                        type_str = "hdmi"
+                        name_str = f"🔊 HDMI ({card_desc})"
+                    elif "headphone" in id_lower or "bcm2835" in id_lower:
+                        type_str = "analog"
+                        name_str = "🎧 3.5mm Klinke (Kopfhörer / Analog)"
+                    elif "usb" in id_lower:
+                        type_str = "usb"
+                        name_str = f"🔌 USB-Audio ({card_desc})"
+
+                    devices.append({
+                        "id": f"plughw:CARD={card_id},DEV=0",
+                        "card": card_num,
+                        "card_id": card_id,
+                        "device": 0,
+                        "name": name_str,
+                        "description": card_desc,
+                        "type": type_str
+                    })
+        except Exception:
+            pass
+
+    return devices
 
 
 def save_config_value(key, value):
@@ -483,7 +587,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
 
             data = {
                 "service": "dbsKioskPi",
-                "version": "1.6.3",
+                "version": "1.7.0",
                 "kiosk_service": kiosk_active,
                 "screen_power": cec_power,
                 "cec_enabled": cfg.get("CEC_ENABLED", "true") == "true",
@@ -499,10 +603,22 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                 "bell": {
                     "sound_exists": os.path.exists(BELL_PATH),
                     "sound_size_bytes": os.path.getsize(BELL_PATH) if os.path.exists(BELL_PATH) else 0,
-                    "volume": int(cfg.get("BELL_VOLUME", "100"))
+                    "volume": int(cfg.get("BELL_VOLUME", "100")),
+                    "audio_device": cfg.get("AUDIO_DEVICE", "default")
                 }
             }
             self._send_json(data, log_summary=f"Live-Status (Kiosk: {kiosk_active}, CEC: {cec_power})", duration_ms=(time.time()-t0)*1000)
+            return
+
+        elif path == "/api/audio/devices":
+            cfg = read_config()
+            curr_dev = cfg.get("AUDIO_DEVICE", "default")
+            devs = get_audio_devices()
+            self._send_json({
+                "success": True,
+                "current_device": curr_dev,
+                "devices": devs
+            }, log_summary=f"Audio-Geräte abgefragt ({len(devs)} verfügbar, aktiv: {curr_dev})", duration_ms=(time.time()-t0)*1000)
             return
 
         elif path == "/api/kiosk/input":
@@ -609,6 +725,26 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "output": res.stdout}, log_summary="Healthcheck-Diagnose ausgeführt", duration_ms=(time.time()-t0)*1000)
             except Exception as e:
                 self._send_json({"success": False, "error": str(e)}, 500, log_summary=f"Healthcheck Fehler: {e}", duration_ms=(time.time()-t0)*1000)
+            return
+
+        # ----------------------------------------------------------------------
+        # Audio Output Device Selection
+        # ----------------------------------------------------------------------
+        elif path == "/api/audio/device":
+            body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+            try:
+                req = json.loads(body)
+            except Exception:
+                self._send_json({"error": "Invalid JSON"}, 400, duration_ms=(time.time()-t0)*1000)
+                return
+
+            new_device = str(req.get("device", "default")).strip()
+            save_config_value("AUDIO_DEVICE", new_device)
+            self._send_json({
+                "success": True,
+                "audio_device": new_device,
+                "message": f"Audio-Ausgang geändert auf: {new_device}"
+            }, log_summary=f"Audio-Ausgang geändert auf: {new_device}", duration_ms=(time.time()-t0)*1000)
             return
 
         # ----------------------------------------------------------------------

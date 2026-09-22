@@ -341,23 +341,25 @@ configure_audio() {
             bell_status="MP3 vorhanden ($(du -h /var/lib/dbskiosk/sounds/bell.mp3 | cut -f1))"
         fi
 
+        local cur_dev="${AUDIO_DEVICE:-default}"
         local choice
         choice=$(whiptail --backtitle "$WT_BACKTITLE" \
             --title "Schulglocke & Audio-Einstellungen" \
-            --menu "Status: $bell_status\nLautstärke: ${BELL_VOLUME:-100}%\n\nWähle eine Aktion:" 17 70 5 \
+            --menu "Status: $bell_status\nLautstärke: ${BELL_VOLUME:-100}%\nAudio-Ausgang: $cur_dev\n\nWähle eine Aktion:" 19 72 6 \
             "1" "TEST: Schulglocke JETZT abspielen" \
             "2" "Standard-Lautstärke ändern (${BELL_VOLUME:-100}%)" \
-            "3" "Pfad zur Schulglocken-MP3 anzeigen" \
-            "4" "API-Dienststatus für Home Assistant prüfen" \
-            "5" "Zurück" 3>&1 1>&2 2>&3)
+            "3" "Audio-Ausgang wählen ($cur_dev)" \
+            "4" "Pfad zur Schulglocken-MP3 anzeigen" \
+            "5" "API-Dienststatus für Home Assistant prüfen" \
+            "6" "Zurück" 3>&1 1>&2 2>&3)
 
-        if [ $? -ne 0 ] || [ "$choice" = "5" ]; then
+        if [ $? -ne 0 ] || [ "$choice" = "6" ]; then
             break
         fi
 
         case "$choice" in
             1)
-                whiptail --backtitle "$WT_BACKTITLE" --infobox "Spiele Schulglocke ab..." 6 50
+                whiptail --backtitle "$WT_BACKTITLE" --infobox "Spiele Schulglocke ab (Ausgang: $cur_dev)..." 6 55
                 /usr/local/bin/dbs-bell play "${BELL_VOLUME:-100}"
                 msg_box "Abgespielt" "Audioausgabe wurde durchgeführt."
                 ;;
@@ -375,11 +377,43 @@ configure_audio() {
                 fi
                 ;;
             3)
+                local dev_choice
+                dev_choice=$(whiptail --backtitle "$WT_BACKTITLE" \
+                    --title "Audio-Ausgang / Soundkarte wählen" \
+                    --menu "Aktuell: $cur_dev\n\nWähle den gewünschten Ausgang für den Schulgong:" 17 74 5 \
+                    "1" "default (System-Standard / Auto)" \
+                    "2" "plughw:CARD=vc4hdmi0,DEV=0 (HDMI 0 - Port neben USB-C)" \
+                    "3" "plughw:CARD=vc4hdmi1,DEV=0 (HDMI 1 - Zweiter HDMI-Port)" \
+                    "4" "plughw:CARD=Headphones,DEV=0 (3.5mm Klinkenbuchse)" \
+                    "5" "Manuell eingeben..." 3>&1 1>&2 2>&3)
+                
+                local new_dev=""
+                case "$dev_choice" in
+                    1) new_dev="default" ;;
+                    2) new_dev="plughw:CARD=vc4hdmi0,DEV=0" ;;
+                    3) new_dev="plughw:CARD=vc4hdmi1,DEV=0" ;;
+                    4) new_dev="plughw:CARD=Headphones,DEV=0" ;;
+                    5)
+                        new_dev=$(whiptail --backtitle "$WT_BACKTITLE" --title "ALSA-Gerät manuell eingeben" \
+                            --inputbox "Gib den ALSA-Gerätebezeichner ein (z. B. hw:0,0 oder plughw:1,0):" 10 65 "$cur_dev" 3>&1 1>&2 2>&3)
+                        ;;
+                esac
+
+                if [ -n "$new_dev" ]; then
+                    if grep -q '^AUDIO_DEVICE=' "$CONFIG_FILE"; then
+                        sed -i "s|^AUDIO_DEVICE=.*|AUDIO_DEVICE=\"$new_dev\"|" "$CONFIG_FILE"
+                    else
+                        echo "AUDIO_DEVICE=\"$new_dev\"" >> "$CONFIG_FILE"
+                    fi
+                    msg_box "Gespeichert" "Audio-Ausgang auf '$new_dev' gesetzt.\n\nTipp: Mit Menüpunkt 1 kannst du den Ton sofort testen."
+                fi
+                ;;
+            4)
                 local sound_info
                 sound_info=$(/usr/local/bin/dbs-bell status)
                 msg_box "Glockendatei Information" "$sound_info\n\nTipp: Eine MP3 kann auch direkt per Home Assistant hochgeladen werden."
                 ;;
-            4)
+            5)
                 local api_stat
                 api_stat=$(systemctl status dbs-api.service 2>&1 || true)
                 whiptail --backtitle "$WT_BACKTITLE" --title "Home Assistant API Dienst" --scrolltext --msgbox "$api_stat" 18 78

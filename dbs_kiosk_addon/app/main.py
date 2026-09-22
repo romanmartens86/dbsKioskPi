@@ -12,6 +12,7 @@ import time
 import queue
 import threading
 import requests
+import re
 from flask import Flask, render_template, request, jsonify, Response
 from provisioner import SSHProvisioner
 
@@ -34,7 +35,11 @@ def load_fleet_data():
     if os.path.exists(DEVICES_FILE):
         try:
             with open(DEVICES_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                for dev in data.get("devices", []):
+                    if "audio_device" not in dev:
+                        dev["audio_device"] = "default"
+                return data
         except Exception:
             pass
 
@@ -55,7 +60,8 @@ def load_fleet_data():
                         "password": old.get("password", ""),
                         "api_port": int(old.get("api_port", 8088)),
                         "bell_enabled": True,
-                        "bell_volume": 80
+                        "bell_volume": 80,
+                        "audio_device": "default"
                     })
         except Exception:
             pass
@@ -70,7 +76,8 @@ def load_fleet_data():
             "password": "",
             "api_port": 8088,
             "bell_enabled": True,
-            "bell_volume": 80
+            "bell_volume": 80,
+            "audio_device": "default"
         })
 
     fleet_data = {
@@ -100,8 +107,12 @@ def get_active_device(fleet_data=None, device_id=None):
     devices = fleet_data.get("devices", [])
     for dev in devices:
         if dev.get("id") == target_id:
+            if "audio_device" not in dev:
+                dev["audio_device"] = "default"
             return dev
     if devices:
+        if "audio_device" not in devices[0]:
+            devices[0]["audio_device"] = "default"
         return devices[0]
     return {
         "id": "kiosk_1",
@@ -112,7 +123,8 @@ def get_active_device(fleet_data=None, device_id=None):
         "password": "",
         "api_port": 8088,
         "bell_enabled": True,
-        "bell_volume": 80
+        "bell_volume": 80,
+        "audio_device": "default"
     }
 
 
@@ -468,6 +480,8 @@ def handle_settings():
             dev["bell_enabled"] = bool(data["bell_enabled"])
         if "bell_volume" in data:
             dev["bell_volume"] = int(data["bell_volume"])
+        if "audio_device" in data:
+            dev["audio_device"] = str(data["audio_device"]).strip()
         save_fleet_data(fleet)
         return jsonify({"success": True, "message": "Einstellungen gespeichert"})
 
@@ -780,6 +794,7 @@ def deploy_latest_dbs_api(device):
     pkg_input = find_package_file("files/dbs-input.sh")
     pkg_rules = find_package_file("files/99-dbskiosk-input.rules")
     pkg_cec = find_package_file("files/cec-control.sh")
+    pkg_bell = find_package_file("files/dbs-bell.sh")
 
     try:
         import paramiko
@@ -802,6 +817,8 @@ def deploy_latest_dbs_api(device):
             sftp.put(pkg_rules, "/tmp/99-dbskiosk-input.rules")
         if pkg_cec:
             sftp.put(pkg_cec, "/tmp/cec-control.sh")
+        if pkg_bell:
+            sftp.put(pkg_bell, "/tmp/dbs-bell.sh")
         sftp.close()
 
         # 2. Execute installation script as root and wait for completion
@@ -814,8 +831,10 @@ def deploy_latest_dbs_api(device):
             f"mkdir -p /run/dbskiosk && "
             f"touch /var/log/dbskiosk-comm.log && "
             f"chmod 666 /var/log/dbskiosk-comm.log && "
-            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.6.3 aktualisiert (WLR_LIBINPUT Fix, SD-Kartenschutz, RAM-Logging, CEC-Fix)\" >> /var/log/dbskiosk-comm.log"
+            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.7.0 aktualisiert (Soundkarten-Auswahl HDMI/Klinke)\" >> /var/log/dbskiosk-comm.log"
         )
+        if pkg_bell:
+            install_script += " && cp /tmp/dbs-bell.sh /usr/local/bin/dbs-bell && chmod 755 /usr/local/bin/dbs-bell"
         if pkg_hc:
             install_script += " && cp /tmp/dbs-healthcheck.sh /usr/local/bin/dbs-healthcheck && chmod 755 /usr/local/bin/dbs-healthcheck"
         if pkg_kiosk:
@@ -1318,6 +1337,160 @@ def upload_bell():
                 pass
 
     return jsonify({"success": True, "message": f"Audiodatei auf {uploaded} Display(s) hochgeladen"})
+
+
+@app.route("/api/pi/audio/devices")
+def get_pi_audio_devices():
+    """Returns available audio playback devices from the active/requested Raspberry Pi."""
+    fleet = load_fleet_data()
+    dev_id = request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+
+    host = device.get("host")
+    port = int(device.get("port", 22))
+    username = device.get("username", "dbsadmin")
+    password = device.get("password", "")
+    api_port = int(device.get("api_port", 8088))
+
+    current_saved = device.get("audio_device", "default")
+
+    if not host:
+        return jsonify({
+            "success": True,
+            "current_device": current_saved,
+            "devices": [{"id": "default", "name": "⚙️ System-Standard (Automatisch)", "type": "default"}]
+        })
+
+    # 1. Try via REST-API on the Pi
+    try:
+        url = f"http://{host}:{api_port}/api/audio/devices"
+        resp = requests.get(url, auth=(username, password), timeout=3.5)
+        if resp.status_code == 200:
+            data = resp.json()
+            if current_saved and current_saved != "default":
+                data["current_device"] = current_saved
+            return jsonify(data)
+    except Exception:
+        pass
+
+    # 2. Fallback via SSH if API not reachable or old version without endpoint
+    if password:
+        try:
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(hostname=host, port=port, username=username, password=password, timeout=5)
+            stdin, stdout, stderr = client.exec_command("aplay -l 2>/dev/null || cat /proc/asound/cards 2>/dev/null")
+            raw_out = stdout.read().decode("utf-8", errors="replace")
+            client.close()
+
+            devices = [{"id": "default", "name": "⚙️ System-Standard (Automatisch)", "type": "default"}]
+            for line in raw_out.splitlines():
+                m = re.match(r"^card\s+(\d+):\s+([^,]+)\[([^\]]+)\],\s+device\s+(\d+):\s+([^\[]+)", line)
+                if m:
+                    card_num = m.group(1)
+                    card_id = m.group(2).strip()
+                    card_desc = m.group(3).strip()
+                    dev_num = m.group(4)
+
+                    type_str = "other"
+                    name_str = f"Karte {card_num}: {card_desc}"
+                    id_lower = (card_id + " " + card_desc).lower()
+                    if "vc4-hdmi-0" in id_lower or "vc4hdmi0" in id_lower or ("hdmi" in id_lower and "0" in id_lower):
+                        type_str = "hdmi"
+                        name_str = "🔊 HDMI 0 (Fernseher / Monitor Port 1)"
+                    elif "vc4-hdmi-1" in id_lower or "vc4hdmi1" in id_lower or ("hdmi" in id_lower and "1" in id_lower):
+                        type_str = "hdmi"
+                        name_str = "🔊 HDMI 1 (Fernseher / Monitor Port 2)"
+                    elif "hdmi" in id_lower:
+                        type_str = "hdmi"
+                        name_str = f"🔊 HDMI (Karte {card_num}: {card_desc})"
+                    elif "headphone" in id_lower or "headset" in id_lower or "bcm2835" in id_lower:
+                        type_str = "analog"
+                        name_str = "🎧 3.5mm Klinke (Kopfhörer / Analog)"
+                    elif "usb" in id_lower:
+                        type_str = "usb"
+                        name_str = f"🔌 USB-Audio ({card_desc})"
+
+                    devices.append({
+                        "id": f"plughw:CARD={card_id},DEV={dev_num}",
+                        "card": card_num,
+                        "card_id": card_id,
+                        "device": int(dev_num),
+                        "name": name_str,
+                        "description": f"{card_desc} (Gerät {dev_num})",
+                        "type": type_str
+                    })
+
+            if len(devices) > 1:
+                return jsonify({
+                    "success": True,
+                    "current_device": current_saved,
+                    "devices": devices
+                })
+        except Exception:
+            pass
+
+    # Standard fallback
+    return jsonify({
+        "success": True,
+        "current_device": current_saved,
+        "devices": [
+            {"id": "default", "name": "⚙️ System-Standard (Automatisch)", "type": "default"},
+            {"id": "plughw:CARD=vc4hdmi0,DEV=0", "name": "🔊 HDMI 0 (Fernseher / Monitor Port 1)", "type": "hdmi"},
+            {"id": "plughw:CARD=vc4hdmi1,DEV=0", "name": "🔊 HDMI 1 (Fernseher / Monitor Port 2)", "type": "hdmi"},
+            {"id": "plughw:CARD=Headphones,DEV=0", "name": "🎧 3.5mm Klinke (Kopfhörer / Analog)", "type": "analog"}
+        ]
+    })
+
+
+@app.route("/api/pi/audio/device", methods=["POST"])
+def set_pi_audio_device():
+    """Sets the audio playback device for a Raspberry Pi and saves it locally in fleet data."""
+    fleet = load_fleet_data()
+    data = request.get_json(silent=True) or {}
+    dev_id = data.get("device_id") or request.args.get("device_id")
+    device = get_active_device(fleet, dev_id)
+
+    audio_device = str(data.get("audio_device", "default")).strip()
+    device["audio_device"] = audio_device
+    save_fleet_data(fleet)
+
+    host = device.get("host")
+    username = device.get("username", "dbsadmin")
+    password = device.get("password", "")
+    api_port = int(device.get("api_port", 8088))
+
+    remote_updated = False
+    if host:
+        # 1. Try REST API
+        try:
+            url = f"http://{host}:{api_port}/api/audio/device"
+            resp = requests.post(url, json={"device": audio_device}, auth=(username, password), timeout=4)
+            if resp.status_code == 200:
+                remote_updated = True
+        except Exception:
+            pass
+
+        # 2. Fallback via SSH if API call failed
+        if not remote_updated and password:
+            try:
+                import paramiko
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                client.connect(hostname=host, port=int(device.get("port", 22)), username=username, password=password, timeout=5)
+                ssh_run_sudo(client, f"sed -i 's|^AUDIO_DEVICE=.*|AUDIO_DEVICE=\"{audio_device}\"|' /etc/dbskiosk/kiosk.conf || echo 'AUDIO_DEVICE=\"{audio_device}\"' >> /etc/dbskiosk/kiosk.conf", password=password)
+                client.close()
+                remote_updated = True
+            except Exception:
+                pass
+
+    return jsonify({
+        "success": True,
+        "audio_device": audio_device,
+        "remote_synced": remote_updated,
+        "message": f"Audio-Ausgang auf '{audio_device}' gesetzt."
+    })
 
 
 @app.route("/api/cec/screen", methods=["POST"])

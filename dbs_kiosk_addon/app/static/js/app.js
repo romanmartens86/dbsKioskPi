@@ -22,6 +22,11 @@ function showToast(message, isError = false) {
 }
 
 function switchTab(tabId) {
+  // Normalize legacy tab names if called
+  if (['fleet', 'kiosk', 'setup', 'cec'].includes(tabId)) {
+    tabId = 'displays';
+  }
+
   document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
 
@@ -31,10 +36,32 @@ function switchTab(tabId) {
   const content = document.getElementById(`tab-${tabId}`);
   if (content) content.classList.add('active');
 
-  if (tabId === 'fleet') loadFleetDashboard();
-  if (tabId === 'kiosk') loadPlaylist();
-  if (tabId === 'bell') { loadBellSchedule(); fetchStatus(); }
-  if (tabId === 'status') { fetchStatus(); updateLogLinks(); }
+  if (tabId === 'displays') {
+    loadFleetDashboard();
+    loadPlaylist();
+    fetchStatus();
+    loadAudioDevices();
+  }
+  if (tabId === 'bell') {
+    loadBellSchedule();
+    fetchStatus();
+    loadAudioDevices();
+    renderBellMatrix();
+  }
+  if (tabId === 'system') {
+    fetchStatus();
+    updateLogLinks();
+  }
+}
+
+function toggleSetupAccordion(forceOpen = null) {
+  const content = document.getElementById('setup-accordion-content');
+  const arrow = document.getElementById('accordion-arrow');
+  if (!content) return;
+  const isCurrentlyOpen = content.style.display !== 'none';
+  const shouldOpen = forceOpen !== null ? forceOpen : !isCurrentlyOpen;
+  content.style.display = shouldOpen ? 'block' : 'none';
+  if (arrow) arrow.style.transform = shouldOpen ? 'rotate(180deg)' : 'rotate(0deg)';
 }
 
 // -----------------------------------------------------------------------------
@@ -70,7 +97,11 @@ function updateDeviceSelectDropdown() {
   const activeDev = fleetDevices.find(d => d.id === activeDeviceId) || fleetDevices[0];
   const ind = document.getElementById('active-device-indicator');
   if (ind && activeDev) {
-    ind.innerText = `Display: ${activeDev.name} (${activeDev.host || 'Keine IP'})`;
+    ind.innerText = `${activeDev.name} (${activeDev.host || 'Keine IP'})`;
+  }
+  const statTitle = document.getElementById('stat-active-dev-title');
+  if (statTitle && activeDev) {
+    statTitle.innerText = `${activeDev.name} (${activeDev.host || 'Keine IP'})`;
   }
 }
 
@@ -101,6 +132,7 @@ function populateSetupFormWithActiveDevice() {
     bellVolSlider.value = vol;
     if (bellVolVal) bellVolVal.innerText = `${vol}%`;
   }
+  loadAudioDevices();
 }
 
 async function onDeviceSelectChange(devId) {
@@ -117,6 +149,7 @@ async function onDeviceSelectChange(devId) {
       populateSetupFormWithActiveDevice();
       fetchStatus();
       loadPlaylist();
+      loadAudioDevices();
       updateLogLinks();
       showToast(`Aktives Display gewechselt zu: ${data.active_device.name}`);
     }
@@ -150,7 +183,8 @@ async function promptNewDevice() {
     if (data.success) {
       showToast(`Kiosk "${name}" erfolgreich hinzugefügt!`);
       await loadFleetData();
-      switchTab('setup');
+      switchTab('displays');
+      toggleSetupAccordion(true);
     } else {
       showToast(`Fehler: ${data.error}`, true);
     }
@@ -215,7 +249,7 @@ async function deleteCurrentDevice() {
     if (data.success) {
       showToast(`Display "${activeDev.name}" entfernt.`);
       await loadFleetData();
-      switchTab('fleet');
+      switchTab('displays');
     } else {
       showToast(`Fehler: ${data.error}`, true);
     }
@@ -248,9 +282,100 @@ async function updateDeviceBellSettings() {
         bell_volume: volume
       })
     });
+    activeDev.bell_enabled = enabled;
+    activeDev.bell_volume = volume;
     showToast(`Glocke für "${activeDev.name}": ${enabled ? 'Aktiviert (' + volume + '%)' : 'Deaktiviert'}`);
+    renderBellMatrix();
   } catch (e) {
     showToast(`Fehler: ${e}`, true);
+  }
+}
+
+async function loadAudioDevices(forceRefresh = false) {
+  const select = document.getElementById('bell-audio-device-select');
+  const badge = document.getElementById('bell-audio-status-badge');
+  if (!select) return;
+
+  if (forceRefresh) {
+    select.innerHTML = '<option value="default">🔄 Lade Soundkarten...</option>';
+    if (badge) badge.innerText = 'Lade...';
+  }
+
+  const activeDev = fleetDevices.find(d => d.id === activeDeviceId);
+  const targetId = activeDeviceId || (activeDev ? activeDev.id : '');
+
+  try {
+    const res = await fetch(apiUrl(`/api/pi/audio/devices?device_id=${targetId}`));
+    if (res.ok) {
+      const data = await res.json();
+      const currentDev = data.current_device || (activeDev && activeDev.audio_device) || 'default';
+      const devices = data.devices || [];
+
+      select.innerHTML = '';
+      devices.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.id;
+        opt.innerText = d.name;
+        if (d.id === currentDev) {
+          opt.selected = true;
+        }
+        select.appendChild(opt);
+      });
+
+      if (!devices.some(d => d.id === currentDev) && currentDev !== 'default') {
+        const customOpt = document.createElement('option');
+        customOpt.value = currentDev;
+        customOpt.innerText = `⚙️ Benutzerdefiniert (${currentDev})`;
+        customOpt.selected = true;
+        select.appendChild(customOpt);
+      }
+
+      if (badge) {
+        if (currentDev.includes('vc4hdmi0') || currentDev.includes('HDMI 0')) {
+          badge.innerText = 'HDMI 0';
+          badge.className = 'status-pill status-pill-online';
+        } else if (currentDev.includes('vc4hdmi') || currentDev.includes('HDMI')) {
+          badge.innerText = 'HDMI';
+          badge.className = 'status-pill status-pill-online';
+        } else if (currentDev.includes('Headphones') || currentDev.includes('Klinke')) {
+          badge.innerText = '3.5mm Klinke';
+          badge.className = 'status-pill';
+        } else {
+          badge.innerText = 'Auto / Standard';
+          badge.className = 'status-pill';
+        }
+      }
+      if (forceRefresh) showToast('Soundkarten erfolgreich erkannt');
+    }
+  } catch (e) {
+    console.error('Konnte Audio-Geräte nicht laden:', e);
+    if (forceRefresh) showToast('Fehler beim Laden der Soundkarten', true);
+  }
+}
+
+async function updateDeviceAudioDevice() {
+  const select = document.getElementById('bell-audio-device-select');
+  if (!select) return;
+  const newDev = select.value;
+  const activeDev = fleetDevices.find(d => d.id === activeDeviceId);
+
+  showToast(`Stelle Audio-Ausgang auf "${newDev}" um...`);
+  try {
+    const res = await fetch(apiUrl('/api/pi/audio/device'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: activeDeviceId, audio_device: newDev })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(data.message || 'Audio-Ausgang erfolgreich gespeichert!');
+      if (activeDev) activeDev.audio_device = newDev;
+      loadAudioDevices();
+    } else {
+      showToast(`Fehler: ${data.error}`, true);
+    }
+  } catch (e) {
+    showToast(`Fehler beim Speichern des Audio-Ausgangs: ${e}`, true);
   }
 }
 
@@ -289,7 +414,7 @@ async function loadFleetDashboard() {
       const bellStatus = dev.bell_enabled !== false ? `🔔 Aktiv (${dev.bell_volume || 80}%)` : '🔕 Stumm';
 
       card.innerHTML = `
-        <div>
+        <div onclick="selectFleetCard('${dev.id}')" style="cursor: pointer;">
           <div class="fleet-card-header">
             <div>
               <div class="fleet-card-title">📍 ${escapeHtml(dev.name)}</div>
@@ -315,14 +440,8 @@ async function loadFleetDashboard() {
         </div>
 
         <div class="fleet-card-actions">
-          <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 10px;" onclick="selectDeviceAndTab('${dev.id}', 'kiosk')">
-            📺 Playlist
-          </button>
-          <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 10px;" onclick="selectDeviceAndTab('${dev.id}', 'cec')">
-            ⚡ TV
-          </button>
-          <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 10px;" onclick="selectDeviceAndTab('${dev.id}', 'setup')">
-            ⚙️ Setup
+          <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 12px; flex: 1;" onclick="selectFleetCard('${dev.id}')">
+            ⚙️ Auswählen & Bearbeiten
           </button>
           <button class="btn btn-secondary" style="font-size: 12px; padding: 5px 8px;" title="Raspberry Pi neu starten (Reboot)" onclick="rebootDevice('${dev.id}', '${escapeHtml(dev.name)}')">
             🔁
@@ -338,6 +457,15 @@ async function loadFleetDashboard() {
   } catch (err) {
     grid.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--danger);">Fehler beim Laden des Flottenstatus: ${err}</div>`;
   }
+}
+
+function selectFleetCard(devId) {
+  onDeviceSelectChange(devId).then(() => {
+    const ind = document.getElementById('active-device-indicator');
+    if (ind) {
+      ind.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  });
 }
 
 async function triggerFleetAction(action) {
@@ -372,6 +500,9 @@ async function triggerFleetAction(action) {
 function selectDeviceAndTab(devId, tabId) {
   onDeviceSelectChange(devId).then(() => {
     switchTab(tabId);
+    if (tabId === 'setup') {
+      toggleSetupAccordion(true);
+    }
   });
 }
 
@@ -788,6 +919,151 @@ async function testPlayBell() {
   }
 }
 
+function renderBellMatrix() {
+  const container = document.getElementById('bell-matrix-container');
+  if (!container) return;
+
+  if (!fleetDevices || fleetDevices.length === 0) {
+    container.innerHTML = '<p style="color: var(--text-secondary); padding: 12px;">Keine Displays angelegt.</p>';
+    return;
+  }
+
+  let html = `
+    <div class="table-responsive">
+      <table>
+        <thead>
+          <tr>
+            <th>Kiosk / Standort</th>
+            <th>IP-Adresse</th>
+            <th>Glocke im Raum</th>
+            <th>Lautstärke</th>
+            <th>Aktion</th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+
+  fleetDevices.forEach((dev) => {
+    const isBellOn = dev.bell_enabled !== false;
+    const vol = dev.bell_volume !== undefined ? dev.bell_volume : 80;
+    html += `
+      <tr>
+        <td style="font-weight: 600;">📍 ${escapeHtml(dev.name)}</td>
+        <td style="font-family: monospace; font-size: 13px; color: var(--text-secondary);">${dev.host || '-'}</td>
+        <td>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" ${isBellOn ? 'checked' : ''} onchange="toggleDeviceBellMatrix('${dev.id}', this.checked)" style="width: 16px; height: 16px;">
+            <span>${isBellOn ? '🔔 Aktiv' : '🔕 Stumm'}</span>
+          </label>
+        </td>
+        <td>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <input type="range" min="10" max="100" value="${vol}" onchange="updateDeviceVolumeMatrix('${dev.id}', this.value)" style="width: 90px;">
+            <span id="matrix-vol-${dev.id}" style="font-size: 12px; font-weight: 600; min-width: 35px;">${vol}%</span>
+          </div>
+        </td>
+        <td>
+          <button class="btn btn-secondary" style="font-size: 12px; padding: 4px 10px;" onclick="testPlayBellForDevice('${dev.id}')" title="Test-Gong auf diesem Gerät abspielen">
+            🔔 Testen
+          </button>
+        </td>
+      </tr>
+    `;
+  });
+
+  html += `
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  container.innerHTML = html;
+}
+
+async function toggleDeviceBellMatrix(devId, enabled) {
+  const dev = fleetDevices.find(d => d.id === devId);
+  if (!dev) return;
+  dev.bell_enabled = enabled;
+  try {
+    await fetch(apiUrl('/api/devices'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: dev.id,
+        name: dev.name,
+        host: dev.host,
+        port: dev.port,
+        username: dev.username,
+        api_port: dev.api_port,
+        bell_enabled: enabled,
+        bell_volume: dev.bell_volume !== undefined ? dev.bell_volume : 80
+      })
+    });
+    showToast(`Gong für "${dev.name}": ${enabled ? 'Aktiviert' : 'Stummgeschaltet'}`);
+    if (dev.id === activeDeviceId) {
+      const check = document.getElementById('bell-enabled-check');
+      if (check) check.checked = enabled;
+    }
+    renderBellMatrix();
+  } catch (e) {
+    showToast(`Fehler: ${e}`, true);
+  }
+}
+
+async function updateDeviceVolumeMatrix(devId, volume) {
+  const dev = fleetDevices.find(d => d.id === devId);
+  if (!dev) return;
+  dev.bell_volume = parseInt(volume, 10);
+  const volEl = document.getElementById(`matrix-vol-${devId}`);
+  if (volEl) volEl.innerText = `${volume}%`;
+
+  try {
+    await fetch(apiUrl('/api/devices'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: dev.id,
+        name: dev.name,
+        host: dev.host,
+        port: dev.port,
+        username: dev.username,
+        api_port: dev.api_port,
+        bell_enabled: dev.bell_enabled !== false,
+        bell_volume: dev.bell_volume
+      })
+    });
+    if (dev.id === activeDeviceId) {
+      const slider = document.getElementById('bell-volume-slider');
+      const valText = document.getElementById('bell-volume-val');
+      if (slider) slider.value = volume;
+      if (valText) valText.innerText = `${volume}%`;
+    }
+  } catch (e) {
+    console.error('Fehler beim Speichern der Lautstärke:', e);
+  }
+}
+
+async function testPlayBellForDevice(devId) {
+  const dev = fleetDevices.find(d => d.id === devId);
+  const name = dev ? dev.name : 'Display';
+  showToast(`Sende Test-Gong an "${name}"...`);
+  try {
+    const res = await fetch(apiUrl(`/api/bell/play?device_id=${devId}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ volume: 100 })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Gong wird auf "${name}" abgespielt!`);
+    } else {
+      showToast(`Fehler: ${data.error}`, true);
+    }
+  } catch (err) {
+    showToast(`Fehler: ${err}`, true);
+  }
+}
+
 // -----------------------------------------------------------------------------
 // 4. HDMI-CEC TV Steuerung
 // -----------------------------------------------------------------------------
@@ -990,6 +1266,30 @@ async function fetchStatus() {
       if (fileStatus) fileStatus.innerText = `Status: ${bellInfo}`;
     }
 
+    if (data.bell && data.bell.audio_device) {
+      const badge = document.getElementById('bell-audio-status-badge');
+      const sel = document.getElementById('bell-audio-device-select');
+      const dev = data.bell.audio_device;
+      if (badge) {
+        if (dev.includes('vc4hdmi0') || dev.includes('HDMI 0')) {
+          badge.innerText = 'HDMI 0';
+          badge.className = 'status-pill status-pill-online';
+        } else if (dev.includes('vc4hdmi') || dev.includes('HDMI')) {
+          badge.innerText = 'HDMI';
+          badge.className = 'status-pill status-pill-online';
+        } else if (dev.includes('Headphones') || dev.includes('Klinke')) {
+          badge.innerText = '3.5mm Klinke';
+          badge.className = 'status-pill';
+        } else {
+          badge.innerText = 'Auto / Standard';
+          badge.className = 'status-pill';
+        }
+      }
+      if (sel && sel.value !== dev && sel.querySelector(`option[value="${dev}"]`)) {
+        sel.value = dev;
+      }
+    }
+
     if (data.cec_on_time && document.getElementById('cec-on-time')) document.getElementById('cec-on-time').value = data.cec_on_time;
     if (data.cec_off_time && document.getElementById('cec-off-time')) document.getElementById('cec-off-time').value = data.cec_off_time;
 
@@ -1059,6 +1359,44 @@ function updateLogLinks() {
   if (dlCommAll) dlCommAll.href = apiUrl(`/api/pi/download-comm-log?device_id=${devId}&minutes=60`);
 }
 
+function getSelectedLogUrl() {
+  const select = document.getElementById('log-type-select');
+  const type = select ? select.value : 'comm-10';
+  const devId = activeDeviceId || '';
+
+  switch (type) {
+    case 'comm-10':
+      return apiUrl(`/api/pi/download-comm-log?device_id=${devId}&minutes=10`);
+    case 'comm-60':
+      return apiUrl(`/api/pi/download-comm-log?device_id=${devId}&minutes=60`);
+    case 'healthcheck':
+      return apiUrl(`/api/pi/healthcheck?device_id=${devId}`);
+    case 'install':
+      return apiUrl(`/api/pi/download-install-log?device_id=${devId}`);
+    case 'config':
+      return apiUrl(`/api/pi/download-config-log?device_id=${devId}`);
+    default:
+      return apiUrl(`/api/pi/download-comm-log?device_id=${devId}&minutes=10`);
+  }
+}
+
+function viewSelectedLog() {
+  const url = getSelectedLogUrl();
+  window.open(url, '_blank');
+}
+
+function downloadSelectedLog() {
+  const url = getSelectedLogUrl();
+  const select = document.getElementById('log-type-select');
+  const type = select ? select.value : 'comm-10';
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `kiosk-${type}-log.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
 async function updatePiAgentOnDevice() {
   const activeDev = fleetDevices.find(d => d.id === activeDeviceId) || { name: 'Aktuelles Display' };
   if (!confirm(`Möchtest du den dbs-api Hintergrunddienst auf "${activeDev.name}" jetzt auf den neuesten Stand aktualisieren?\n\nDie neue Datei wird per SSH übertragen und der Dienst dbs-api.service neu gestartet.`)) return;
@@ -1126,8 +1464,10 @@ async function runLiveHealthcheck() {
 window.addEventListener('DOMContentLoaded', async () => {
   await loadFleetData();
   loadFleetDashboard();
+  loadPlaylist();
   fetchStatus();
   updateLogLinks();
+  renderBellMatrix();
 
   // Dropzone setup
   const dropzone = document.getElementById('bell-dropzone');

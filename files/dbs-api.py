@@ -587,7 +587,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
 
             data = {
                 "service": "dbsKioskPi",
-                "version": "1.7.0",
+                "version": "1.7.1",
                 "kiosk_service": kiosk_active,
                 "screen_power": cec_power,
                 "cec_enabled": cfg.get("CEC_ENABLED", "true") == "true",
@@ -773,28 +773,41 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
             content_type = self.headers.get("Content-Type", "")
             os.makedirs(SOUNDS_DIR, exist_ok=True)
 
-            if "multipart/form-data" in content_type:
-                form = cgi.FieldStorage(
-                    fp=self.rfile,
-                    headers=self.headers,
-                    environ={'REQUEST_METHOD': 'POST', 'CONTENT_TYPE': content_type}
-                )
-                if "file" in form and form["file"].file:
+            try:
+                # 1. Fall: Multipart Form-Data (ohne externes cgi-Modul, boundary-basiert)
+                if "multipart/form-data" in content_type:
+                    boundary = None
+                    for part in content_type.split(";"):
+                        part = part.strip()
+                        if part.startswith("boundary="):
+                            boundary = part.split("=", 1)[1].strip('"').encode("utf-8")
+                            break
+                    raw_data = self.rfile.read(content_length)
+                    file_data = None
+                    if boundary and boundary in raw_data:
+                        parts = raw_data.split(b"--" + boundary)
+                        for p in parts:
+                            if b"filename=" in p and b"\r\n\r\n" in p:
+                                file_data = p.split(b"\r\n\r\n", 1)[1].rstrip(b"\r\n")
+                                break
+                    if file_data and len(file_data) > 100:
+                        with open(BELL_PATH, "wb") as f:
+                            f.write(file_data)
+                        self._send_json({"success": True, "message": "MP3 bell sound uploaded successfully", "size": len(file_data)}, log_summary=f"MP3-Glockendatei hochgeladen ({len(file_data)} Bytes)", duration_ms=(time.time()-t0)*1000)
+                        return
+
+                # 2. Fall: Direkte Binärdaten (audio/mpeg, application/octet-stream oder Standard-POST)
+                audio_data = self.rfile.read(content_length) if not ("multipart/form-data" in content_type) else b""
+                if len(audio_data) >= 100:
                     with open(BELL_PATH, "wb") as f:
-                        shutil.copyfileobj(form["file"].file, f)
-                    self._send_json({"success": True, "message": "MP3 bell sound uploaded successfully", "size": os.path.getsize(BELL_PATH)}, log_summary="MP3-Glockendatei hochgeladen", duration_ms=(time.time()-t0)*1000)
+                        f.write(audio_data)
+                    self._send_json({"success": True, "message": "MP3 bell sound uploaded successfully", "size": len(audio_data)}, log_summary=f"MP3-Glockendatei gespeichert ({len(audio_data)} Bytes)", duration_ms=(time.time()-t0)*1000)
                     return
-                else:
-                    self._send_json({"error": "No 'file' field in multipart form"}, 400, duration_ms=(time.time()-t0)*1000)
-                    return
-            else:
-                audio_data = self.rfile.read(content_length)
-                if len(audio_data) < 100:
-                    self._send_json({"error": "Uploaded data is too small or invalid"}, 400, duration_ms=(time.time()-t0)*1000)
-                    return
-                with open(BELL_PATH, "wb") as f:
-                    f.write(audio_data)
-                self._send_json({"success": True, "message": "MP3 bell sound uploaded successfully", "size": len(audio_data)}, log_summary=f"MP3-Glockendatei gespeichert ({len(audio_data)} Bytes)", duration_ms=(time.time()-t0)*1000)
+
+                self._send_json({"error": "Uploaded data is too small or invalid"}, 400, duration_ms=(time.time()-t0)*1000)
+                return
+            except Exception as ex:
+                self._send_json({"error": f"Upload failed: {str(ex)}"}, 500, duration_ms=(time.time()-t0)*1000)
                 return
 
         # ----------------------------------------------------------------------

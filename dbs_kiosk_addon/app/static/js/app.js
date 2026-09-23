@@ -876,7 +876,7 @@ async function saveBellSchedule() {
 async function uploadBellFile(file) {
   if (!file) return;
   const statusEl = document.getElementById('bell-file-status');
-  statusEl.innerText = `Übertrage ${file.name} auf alle Kioske...`;
+  statusEl.innerText = `Übertrage ${file.name}...`;
 
   const formData = new FormData();
   formData.append('file', file);
@@ -888,8 +888,9 @@ async function uploadBellFile(file) {
     });
     const data = await res.json();
     if (data.success) {
-      showToast('MP3 Schulglocke erfolgreich an alle Displays verteilt!');
+      showToast(data.message || 'MP3 Schulglocke erfolgreich gesichert!');
       statusEl.innerText = `Aktiv: ${file.name} (${Math.round(file.size / 1024)} KB)`;
+      setTimeout(fetchStatus, 1000);
     } else {
       showToast(`Fehler beim Hochladen: ${data.error}`, true);
       statusEl.innerText = 'Fehler beim Hochladen';
@@ -1257,9 +1258,12 @@ async function fetchStatus() {
     }
 
     if (data.bell) {
-      const bellInfo = data.bell.sound_exists
-        ? `Vorhanden (${Math.round((data.bell.sound_size_bytes || 0) / 1024)} KB)`
-        : 'Keine MP3 vorhanden';
+      let bellInfo = 'Keine MP3 vorhanden';
+      if (data.bell.sound_exists) {
+        bellInfo = `Vorhanden (${Math.round((data.bell.sound_size_bytes || 0) / 1024)} KB)`;
+      } else if (data.bell_addon_stored) {
+        bellInfo = `Im Add-on gesichert (${Math.round((data.bell_addon_size || 0) / 1024)} KB)`;
+      }
       const sBell = document.getElementById('stat-bell-info');
       if (sBell) sBell.innerText = bellInfo;
       const fileStatus = document.getElementById('bell-file-status');

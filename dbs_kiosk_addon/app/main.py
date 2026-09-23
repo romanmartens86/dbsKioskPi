@@ -24,6 +24,8 @@ if not os.path.exists(DATA_DIR):
 DEVICES_FILE = os.path.join(DATA_DIR, "devices.json")
 OLD_SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 LOCAL_LOG_FILE = os.path.join(DATA_DIR, "dbskiosk-install.log")
+BELL_STORAGE_DIR = os.path.join(DATA_DIR, "sounds")
+LOCAL_BELL_FILE = os.path.join(BELL_STORAGE_DIR, "bell.mp3")
 
 # Queue for real-time log streaming
 log_queue = queue.Queue(maxsize=1000)
@@ -819,11 +821,16 @@ def deploy_latest_dbs_api(device):
             sftp.put(pkg_cec, "/tmp/cec-control.sh")
         if pkg_bell:
             sftp.put(pkg_bell, "/tmp/dbs-bell.sh")
+        if os.path.exists(LOCAL_BELL_FILE):
+            try:
+                sftp.put(LOCAL_BELL_FILE, "/tmp/bell.mp3")
+            except Exception:
+                pass
         sftp.close()
 
         # 2. Execute installation script as root and wait for completion
         install_script = (
-            f"mkdir -p /etc/dbskiosk /var/log /var/lib/dbskiosk /etc/udev/rules.d /etc/systemd/system/kiosk.service.d && "
+            f"mkdir -p /etc/dbskiosk /var/log /var/lib/dbskiosk /var/lib/dbskiosk/sounds /etc/udev/rules.d /etc/systemd/system/kiosk.service.d && "
             f"echo '{username}:{password}' > /etc/dbskiosk/api_auth.conf && "
             f"chmod 600 /etc/dbskiosk/api_auth.conf && "
             f"cp /tmp/dbs-api.py /usr/local/bin/dbs-api && "
@@ -831,10 +838,12 @@ def deploy_latest_dbs_api(device):
             f"mkdir -p /run/dbskiosk && "
             f"touch /var/log/dbskiosk-comm.log && "
             f"chmod 666 /var/log/dbskiosk-comm.log && "
-            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.7.0 aktualisiert (Soundkarten-Auswahl HDMI/Klinke)\" >> /var/log/dbskiosk-comm.log"
+            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.7.1 aktualisiert\" >> /var/log/dbskiosk-comm.log"
         )
         if pkg_bell:
             install_script += " && cp /tmp/dbs-bell.sh /usr/local/bin/dbs-bell && chmod 755 /usr/local/bin/dbs-bell"
+        if os.path.exists(LOCAL_BELL_FILE):
+            install_script += " && cp /tmp/bell.mp3 /var/lib/dbskiosk/sounds/bell.mp3 && chmod 644 /var/lib/dbskiosk/sounds/bell.mp3"
         if pkg_hc:
             install_script += " && cp /tmp/dbs-healthcheck.sh /usr/local/bin/dbs-healthcheck && chmod 755 /usr/local/bin/dbs-healthcheck"
         if pkg_kiosk:
@@ -1198,9 +1207,22 @@ def get_kiosk_status():
     base_url = get_pi_api_base(device)
     try:
         resp = requests.get(f"{base_url}/api/status", auth=get_pi_auth(device), timeout=4)
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+                if os.path.exists(LOCAL_BELL_FILE):
+                    data["bell_addon_stored"] = True
+                    data["bell_addon_size"] = os.path.getsize(LOCAL_BELL_FILE)
+                return jsonify(data), 200
+            except Exception:
+                pass
         return Response(resp.content, status=resp.status_code, content_type="application/json")
     except Exception as e:
-        return jsonify({"error": "Pi nicht erreichbar", "details": str(e), "status": "offline"}), 503
+        data = {"error": "Pi nicht erreichbar", "details": str(e), "status": "offline"}
+        if os.path.exists(LOCAL_BELL_FILE):
+            data["bell_addon_stored"] = True
+            data["bell_addon_size"] = os.path.getsize(LOCAL_BELL_FILE)
+        return jsonify(data), 503
 
 
 @app.route("/api/kiosk/playlist", methods=["GET", "POST"])
@@ -1317,26 +1339,71 @@ def play_bell():
 @app.route("/api/bell/upload", methods=["POST"])
 def upload_bell():
     if "file" not in request.files:
-        return jsonify({"error": "Keine Audiodatei übergeben"}), 400
+        return jsonify({"success": False, "error": "Keine Audiodatei übergeben"}), 400
     file = request.files["file"]
     file_bytes = file.read()
-    file_name = file.filename
-    file_type = file.content_type
+
+    if len(file_bytes) < 100:
+        return jsonify({"success": False, "error": "Die Datei ist leer oder beschädigt"}), 400
+
+    # 1. Permanent im Home Assistant Add-on Speicher ablegen
+    try:
+        os.makedirs(BELL_STORAGE_DIR, exist_ok=True)
+        with open(LOCAL_BELL_FILE, "wb") as f:
+            f.write(file_bytes)
+    except Exception as e:
+        app.logger.error(f"Fehler beim Speichern der Glockendatei im Add-on: {e}")
 
     fleet = load_fleet_data()
-    # Upload sound to ALL reachable devices in fleet so audio files are available everywhere
+    devices = [d for d in fleet.get("devices", []) if d.get("host")]
     uploaded = 0
-    for dev in fleet.get("devices", []):
-        if dev.get("host"):
-            try:
-                base_url = get_pi_api_base(dev)
-                files = {"file": (file_name, file_bytes, file_type)}
-                requests.post(f"{base_url}/api/bell/upload", files=files, auth=get_pi_auth(dev), timeout=12)
-                uploaded += 1
-            except Exception:
-                pass
+    errors = []
 
-    return jsonify({"success": True, "message": f"Audiodatei auf {uploaded} Display(s) hochgeladen"})
+    # 2. An alle erreichbaren Displays per direktem Binär-Upload übertragen
+    for dev in devices:
+        try:
+            base_url = get_pi_api_base(dev)
+            headers = {"Content-Type": "audio/mpeg"}
+            resp = requests.post(
+                f"{base_url}/api/bell/upload",
+                data=file_bytes,
+                headers=headers,
+                auth=get_pi_auth(dev),
+                timeout=15
+            )
+            if resp.status_code == 200:
+                uploaded += 1
+            else:
+                errors.append(f"{dev.get('name', dev.get('host'))}: HTTP {resp.status_code}")
+        except Exception as ex:
+            errors.append(f"{dev.get('name', dev.get('host'))}: {str(ex)}")
+
+    size_kb = round(len(file_bytes) / 1024)
+    msg = f"Audiodatei ({size_kb} KB) im Add-on dauerhaft gesichert"
+    if devices:
+        msg += f" und an {uploaded} von {len(devices)} Display(s) übertragen."
+        if errors and uploaded < len(devices):
+            msg += f" (Hinweis: {'; '.join(errors)})"
+    else:
+        msg += " (noch keine Displays in der Flotte hinterlegt)."
+
+    return jsonify({
+        "success": True,
+        "message": msg,
+        "uploaded": uploaded,
+        "total_devices": len(devices),
+        "size_bytes": len(file_bytes),
+        "saved_in_addon": True
+    })
+
+
+@app.route("/api/bell/sound", methods=["GET"])
+def download_bell_sound():
+    """Serves the stored bell MP3 audio from the Add-on."""
+    if os.path.exists(LOCAL_BELL_FILE):
+        from flask import send_file
+        return send_file(LOCAL_BELL_FILE, mimetype="audio/mpeg", as_attachment=False)
+    return jsonify({"error": "Keine Audiodatei im Add-on vorhanden"}), 404
 
 
 @app.route("/api/pi/audio/devices")

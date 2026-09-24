@@ -838,7 +838,7 @@ def deploy_latest_dbs_api(device):
             f"mkdir -p /run/dbskiosk && "
             f"touch /var/log/dbskiosk-comm.log && "
             f"chmod 666 /var/log/dbskiosk-comm.log && "
-            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.7.1 aktualisiert\" >> /var/log/dbskiosk-comm.log"
+            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.7.2 aktualisiert\" >> /var/log/dbskiosk-comm.log"
         )
         if pkg_bell:
             install_script += " && cp /tmp/dbs-bell.sh /usr/local/bin/dbs-bell && chmod 755 /usr/local/bin/dbs-bell"
@@ -859,8 +859,9 @@ def deploy_latest_dbs_api(device):
 
         # HDMI Standby Keepalive & Hotplug Fix (cmdline.txt & config.txt) + SD-Kartenschutz (journald volatile)
         install_script += (
-            " && ([ -f /boot/firmware/cmdline.txt ] && (grep -q 'video=HDMI-A-1:' /boot/firmware/cmdline.txt || sed -i 's/$/ video=HDMI-A-1:1920x1080@60D/' /boot/firmware/cmdline.txt) || true)"
-            " && ([ -f /boot/firmware/config.txt ] && (grep -q 'hdmi_force_hotplug=1' /boot/firmware/config.txt || sed -i '/\\[all\\]/a hdmi_force_hotplug=1\\nhdmi_group=1\\nhdmi_mode=16' /boot/firmware/config.txt) || true)"
+            " && ([ -f /boot/firmware/cmdline.txt ] && (sed -i 's/video=HDMI-A-1:1920x1080@60D/video=HDMI-A-1:1920x1080@60/' /boot/firmware/cmdline.txt 2>/dev/null; grep -q 'video=HDMI-A-1:' /boot/firmware/cmdline.txt || sed -i 's/$/ video=HDMI-A-1:1920x1080@60/' /boot/firmware/cmdline.txt) || true)"
+            " && ([ -f /boot/firmware/config.txt ] && (grep -q 'hdmi_drive=2' /boot/firmware/config.txt || echo 'hdmi_drive=2' >> /boot/firmware/config.txt) || true)"
+            " && ([ -f /boot/firmware/config.txt ] && (grep -q 'hdmi_force_hotplug=1' /boot/firmware/config.txt || sed -i '/\\[all\\]/a hdmi_force_hotplug=1\\nhdmi_group=1\\nhdmi_mode=16\\nhdmi_drive=2' /boot/firmware/config.txt) || true)"
             " && mkdir -p /etc/systemd/journald.conf.d /run/dbskiosk"
             " && printf '[Journal]\\nStorage=volatile\\nRuntimeMaxUse=32M\\n' > /etc/systemd/journald.conf.d/00-dbskiosk-volatile.conf"
             " && (systemctl restart systemd-journald 2>/dev/null || true)"

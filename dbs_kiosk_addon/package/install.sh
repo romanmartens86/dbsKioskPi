@@ -152,7 +152,7 @@ if [ -f "$CONFIG_TXT" ]; then
         log_success "gpu_mem=128 zu $CONFIG_TXT hinzugefügt."
     fi
 
-    # HDMI-CEC Hotplug & Full-HD Lock
+    # HDMI-CEC Hotplug, Full-HD Lock & HDMI Audio (hdmi_drive=2 erzwingt HDMI-Audio statt DVI)
     if ! grep -q "^hdmi_force_hotplug=1" "$CONFIG_TXT"; then
         echo "" >> "$CONFIG_TXT"
         echo "# dbsKioskPi HDMI-CEC Hotplug & Standby Fix" >> "$CONFIG_TXT"
@@ -161,19 +161,26 @@ if [ -f "$CONFIG_TXT" ]; then
         echo "hdmi_mode=16" >> "$CONFIG_TXT"
         log_success "HDMI Hotplug & 1080p60 Modus zu $CONFIG_TXT hinzugefügt."
     fi
+    if ! grep -q "^hdmi_drive=2" "$CONFIG_TXT"; then
+        echo "hdmi_drive=2" >> "$CONFIG_TXT"
+        log_success "hdmi_drive=2 (HDMI-Audio aktivieren) zu $CONFIG_TXT hinzugefügt."
+    fi
 else
     log_warn "Keine config.txt unter /boot/firmware oder /boot gefunden. Überspringe GPU-Speichereintrag."
 fi
 
-# Kernel cmdline: Force HDMI-A-1 to connected digital 1080p60 to keep CEC alive during display standby
+# Kernel cmdline: Force HDMI-A-1 to connected 1080p60 to keep CEC alive during display standby
+# WICHTIG: Kein 'D'-Suffix verwenden (D erzwingt DVI-D-Modus und deaktiviert HDMI-Audio!)
 CMDLINE_TXT="/boot/firmware/cmdline.txt"
 if [ ! -f "$CMDLINE_TXT" ]; then
     CMDLINE_TXT="/boot/cmdline.txt"
 fi
 if [ -f "$CMDLINE_TXT" ]; then
+    # Entferne veraltetes '60D' (DVI), falls vorhanden
+    sed -i 's/video=HDMI-A-1:1920x1080@60D/video=HDMI-A-1:1920x1080@60/' "$CMDLINE_TXT" 2>/dev/null || true
     if ! grep -q "video=HDMI-A-1:" "$CMDLINE_TXT"; then
-        sed -i 's/$/ video=HDMI-A-1:1920x1080@60D/' "$CMDLINE_TXT"
-        log_success "video=HDMI-A-1:1920x1080@60D zu $CMDLINE_TXT hinzugefügt (CEC Standby-Keepalive)."
+        sed -i 's/$/ video=HDMI-A-1:1920x1080@60/' "$CMDLINE_TXT"
+        log_success "video=HDMI-A-1:1920x1080@60 zu $CMDLINE_TXT hinzugefügt (CEC Standby-Keepalive mit HDMI-Audio)."
     fi
 fi
 
@@ -213,6 +220,31 @@ log_success "Systemd-Journal auf RAM (Storage=volatile, max 32MB) umgestellt."
 log_info "Erstelle Konfigurationsverzeichnisse /etc/dbskiosk und /var/lib/dbskiosk/sounds..."
 mkdir -p /etc/dbskiosk
 mkdir -p /var/lib/dbskiosk/sounds
+
+# Integrierten 2-Ton-Gong als Standard anlegen, falls noch keine Glocke existiert
+if [ ! -f /var/lib/dbskiosk/sounds/bell.mp3 ] && [ ! -f /var/lib/dbskiosk/sounds/default_chime.wav ]; then
+    python3 -c "
+import wave, math, struct
+tones = [(659.25, 0.7), (523.25, 1.1)]
+sample_rate = 48000
+frames = []
+for freq, dur in tones:
+    n = int(sample_rate * dur)
+    for i in range(n):
+        t = i / sample_rate
+        env = math.exp(-3.5 * t / dur)
+        val = (0.8 * math.sin(2 * math.pi * freq * t) + 0.2 * math.sin(2 * math.pi * freq * 2 * t)) * env
+        s = int(val * 32767 * 0.85)
+        frames.append((s, s))
+with wave.open('/var/lib/dbskiosk/sounds/default_chime.wav', 'wb') as wf:
+    wf.setnchannels(2)
+    wf.setsampwidth(2)
+    wf.setframerate(sample_rate)
+    for l, r in frames:
+        wf.writeframes(struct.pack('<hh', l, r))
+" >/dev/null 2>&1 || true
+fi
+
 chown -R "$TARGET_USER:$TARGET_USER" /var/lib/dbskiosk 2>/dev/null || true
 
 if [ ! -f "/etc/dbskiosk/kiosk.conf" ]; then

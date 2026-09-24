@@ -587,7 +587,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
 
             data = {
                 "service": "dbsKioskPi",
-                "version": "1.7.1",
+                "version": "1.7.2",
                 "kiosk_service": kiosk_active,
                 "screen_power": cec_power,
                 "cec_enabled": cfg.get("CEC_ENABLED", "true") == "true",

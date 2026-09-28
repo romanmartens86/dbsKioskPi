@@ -280,6 +280,28 @@ cp "$SCRIPT_DIR/files/dbs-api.py" /usr/local/bin/dbs-api
 chmod 755 /usr/local/bin/dbs-api
 python3 -m py_compile /usr/local/bin/dbs-api 2>/dev/null || true
 
+# ALSA System-Default Audio Routing (bevorzugt HDMI für Browser & System-Sounds)
+log_info "Konfiguriere ALSA-Standard-Audiogerät (HDMI bevorzugt)..."
+HDMI_CARD=$(aplay -l 2>/dev/null | grep -E "vc4hdmi|vc4-hdmi" | head -n1 | sed -E 's/.*card ([0-9]+): ([^ ,]+).*/\2/' || true)
+if [ -n "$HDMI_CARD" ]; then
+    cat <<EOF > /etc/asound.conf
+# dbsKioskPi - System ALSA Default Audio Routing
+pcm.!default {
+    type plug
+    slave.pcm "hw:CARD=${HDMI_CARD},DEV=0"
+}
+
+ctl.!default {
+    type hw
+    card ${HDMI_CARD}
+}
+EOF
+    chmod 644 /etc/asound.conf
+    cp /etc/asound.conf "/home/$TARGET_USER/.asoundrc" 2>/dev/null || true
+    chown "$TARGET_USER:$TARGET_USER" "/home/$TARGET_USER/.asoundrc" 2>/dev/null || true
+    log_success "ALSA-Standardgerät erfolgreich auf HDMI ($HDMI_CARD) gesetzt."
+fi
+
 # System Healthcheck & Diagnosetool installieren
 log_info "Installiere Healthcheck-Diagnosetool (/usr/local/bin/dbs-healthcheck)..."
 cp "$SCRIPT_DIR/files/dbs-healthcheck.sh" /usr/local/bin/dbs-healthcheck

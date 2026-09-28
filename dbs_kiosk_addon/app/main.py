@@ -838,7 +838,7 @@ def deploy_latest_dbs_api(device):
             f"mkdir -p /run/dbskiosk && "
             f"touch /var/log/dbskiosk-comm.log && "
             f"chmod 666 /var/log/dbskiosk-comm.log && "
-            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.7.2 aktualisiert\" >> /var/log/dbskiosk-comm.log"
+            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.7.3 aktualisiert\" >> /var/log/dbskiosk-comm.log"
         )
         if pkg_bell:
             install_script += " && cp /tmp/dbs-bell.sh /usr/local/bin/dbs-bell && chmod 755 /usr/local/bin/dbs-bell"
@@ -857,11 +857,12 @@ def deploy_latest_dbs_api(device):
         if pkg_cec:
             install_script += " && cp /tmp/cec-control.sh /usr/local/bin/dbs-cec && chmod 755 /usr/local/bin/dbs-cec"
 
-        # HDMI Standby Keepalive & Hotplug Fix (cmdline.txt & config.txt) + SD-Kartenschutz (journald volatile)
+        # HDMI Standby Keepalive, ALSA Audio Routing & Hotplug Fix + SD-Kartenschutz (journald volatile)
         install_script += (
             " && ([ -f /boot/firmware/cmdline.txt ] && (sed -i 's/video=HDMI-A-1:1920x1080@60D/video=HDMI-A-1:1920x1080@60/' /boot/firmware/cmdline.txt 2>/dev/null; grep -q 'video=HDMI-A-1:' /boot/firmware/cmdline.txt || sed -i 's/$/ video=HDMI-A-1:1920x1080@60/' /boot/firmware/cmdline.txt) || true)"
             " && ([ -f /boot/firmware/config.txt ] && (grep -q 'hdmi_drive=2' /boot/firmware/config.txt || echo 'hdmi_drive=2' >> /boot/firmware/config.txt) || true)"
             " && ([ -f /boot/firmware/config.txt ] && (grep -q 'hdmi_force_hotplug=1' /boot/firmware/config.txt || sed -i '/\\[all\\]/a hdmi_force_hotplug=1\\nhdmi_group=1\\nhdmi_mode=16\\nhdmi_drive=2' /boot/firmware/config.txt) || true)"
+            " && (HDMI_C=$(aplay -l 2>/dev/null | grep -E 'vc4hdmi|vc4-hdmi' | head -n1 | sed -E 's/.*card ([0-9]+): ([^ ,]+).*/\\2/' || true); if [ -n \"$HDMI_C\" ] && [ ! -f /etc/asound.conf ]; then printf '# dbsKioskPi ALSA Default\\npcm.!default {\\n    type plug\\n    slave.pcm \"hw:CARD=%s,DEV=0\"\\n}\\nctl.!default {\\n    type hw\\n    card %s\\n}\\n' \"$HDMI_C\" \"$HDMI_C\" > /etc/asound.conf && chmod 644 /etc/asound.conf && cp /etc/asound.conf /home/dbsadmin/.asoundrc 2>/dev/null && chown dbsadmin:dbsadmin /home/dbsadmin/.asoundrc 2>/dev/null; fi)"
             " && mkdir -p /etc/systemd/journald.conf.d /run/dbskiosk"
             " && printf '[Journal]\\nStorage=volatile\\nRuntimeMaxUse=32M\\n' > /etc/systemd/journald.conf.d/00-dbskiosk-volatile.conf"
             " && (systemctl restart systemd-journald 2>/dev/null || true)"
@@ -1470,6 +1471,9 @@ def get_pi_audio_devices():
                     elif "vc4-hdmi-1" in id_lower or "vc4hdmi1" in id_lower or ("hdmi" in id_lower and "1" in id_lower):
                         type_str = "hdmi"
                         name_str = "🔊 HDMI 1 (Fernseher / Monitor Port 2)"
+                    elif "vc4-hdmi" in id_lower or "vc4hdmi" in id_lower:
+                        type_str = "hdmi"
+                        name_str = "🔊 HDMI (Fernseher / Monitor)"
                     elif "hdmi" in id_lower:
                         type_str = "hdmi"
                         name_str = f"🔊 HDMI (Karte {card_num}: {card_desc})"
@@ -1507,6 +1511,7 @@ def get_pi_audio_devices():
             {"id": "default", "name": "⚙️ System-Standard (Automatisch)", "type": "default"},
             {"id": "plughw:CARD=vc4hdmi0,DEV=0", "name": "🔊 HDMI 0 (Fernseher / Monitor Port 1)", "type": "hdmi"},
             {"id": "plughw:CARD=vc4hdmi1,DEV=0", "name": "🔊 HDMI 1 (Fernseher / Monitor Port 2)", "type": "hdmi"},
+            {"id": "plughw:CARD=vc4hdmi,DEV=0", "name": "🔊 HDMI (Raspberry Pi 3 / Single HDMI)", "type": "hdmi"},
             {"id": "plughw:CARD=Headphones,DEV=0", "name": "🎧 3.5mm Klinke (Kopfhörer / Analog)", "type": "analog"}
         ]
     })
@@ -1547,7 +1552,16 @@ def set_pi_audio_device():
                 client = paramiko.SSHClient()
                 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 client.connect(hostname=host, port=int(device.get("port", 22)), username=username, password=password, timeout=5)
-                ssh_run_sudo(client, f"sed -i 's|^AUDIO_DEVICE=.*|AUDIO_DEVICE=\"{audio_device}\"|' /etc/dbskiosk/kiosk.conf || echo 'AUDIO_DEVICE=\"{audio_device}\"' >> /etc/dbskiosk/kiosk.conf", password=password)
+                ssh_cmd = f"sed -i 's|^AUDIO_DEVICE=.*|AUDIO_DEVICE=\"{audio_device}\"|' /etc/dbskiosk/kiosk.conf || echo 'AUDIO_DEVICE=\"{audio_device}\"' >> /etc/dbskiosk/kiosk.conf"
+                if "CARD=" in audio_device:
+                    m = re.search(r"CARD=([^,]+)", audio_device)
+                    card_n = m.group(1).strip() if m else ""
+                    if card_n:
+                        ssh_cmd += (
+                            f" && printf '# dbsKioskPi ALSA Default\\npcm.!default {{\\n    type plug\\n    slave.pcm \"hw:CARD={card_n},DEV=0\"\\n}}\\nctl.!default {{\\n    type hw\\n    card {card_n}\\n}}\\n' > /etc/asound.conf && chmod 644 /etc/asound.conf"
+                            f" && cp /etc/asound.conf /home/{username}/.asoundrc 2>/dev/null && chown {username}:{username} /home/{username}/.asoundrc 2>/dev/null || true"
+                        )
+                ssh_run_sudo(client, ssh_cmd, password=password)
                 client.close()
                 remote_updated = True
             except Exception:

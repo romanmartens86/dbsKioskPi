@@ -16,8 +16,15 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 BELL_FILE="${BELL_SOUND_PATH:-$DEFAULT_BELL}"
-DEFAULT_VOLUME="${BELL_VOLUME:-100}"
 AUDIO_DEVICE="${AUDIO_DEVICE:-default}"
+
+# Falls 'default' gewählt ist: Wenn eine HDMI-Karte vorhanden ist, bevorzuge diese statt 3.5mm Klinke
+if [ "$AUDIO_DEVICE" = "default" ]; then
+    DETECTED_HDMI=$(aplay -l 2>/dev/null | grep -E "vc4hdmi|vc4-hdmi" | head -n1 | sed -E 's/.*card ([0-9]+): ([^ ,]+).*/\2/' || true)
+    if [ -n "$DETECTED_HDMI" ]; then
+        AUDIO_DEVICE="plughw:CARD=${DETECTED_HDMI},DEV=0"
+    fi
+fi
 
 ACTION="${1:-play}"
 VOLUME="${2:-$DEFAULT_VOLUME}"
@@ -33,6 +40,7 @@ calculate_gain() {
 # ALSA-Mixer entmuten (HDMI IEC958 und Master/PCM Lautstärke)
 unmute_alsa() {
     if command -v amixer >/dev/null 2>&1; then
+        amixer -c vc4hdmi sset 'IEC958' on >/dev/null 2>&1 || true
         amixer -c vc4hdmi0 sset 'IEC958' on >/dev/null 2>&1 || true
         amixer -c vc4hdmi1 sset 'IEC958' on >/dev/null 2>&1 || true
         amixer sset 'PCM' unmute 100% >/dev/null 2>&1 || true

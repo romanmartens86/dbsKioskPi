@@ -223,6 +223,9 @@ def get_audio_devices():
                     elif "vc4-hdmi-1" in id_lower or "vc4hdmi1" in id_lower or ("hdmi" in id_lower and "1" in id_lower):
                         type_str = "hdmi"
                         name_str = "🔊 HDMI 1 (Fernseher / Monitor Port 2)"
+                    elif "vc4-hdmi" in id_lower or "vc4hdmi" in id_lower:
+                        type_str = "hdmi"
+                        name_str = "🔊 HDMI (Fernseher / Monitor)"
                     elif "hdmi" in id_lower:
                         type_str = "hdmi"
                         name_str = f"🔊 HDMI (Karte {card_num}: {card_desc})"
@@ -267,6 +270,9 @@ def get_audio_devices():
                     elif "vc4-hdmi-1" in id_lower or "vc4hdmi1" in id_lower:
                         type_str = "hdmi"
                         name_str = "🔊 HDMI 1 (Fernseher / Monitor Port 2)"
+                    elif "vc4-hdmi" in id_lower or "vc4hdmi" in id_lower:
+                        type_str = "hdmi"
+                        name_str = "🔊 HDMI (Fernseher / Monitor)"
                     elif "hdmi" in id_lower:
                         type_str = "hdmi"
                         name_str = f"🔊 HDMI ({card_desc})"
@@ -292,6 +298,63 @@ def get_audio_devices():
     return devices
 
 
+def apply_system_asound_conf(audio_device):
+    """
+    Ensures /etc/asound.conf and /home/$USER/.asoundrc route default ALSA audio
+    (Chromium browser, web content, system sounds) to the chosen audio device.
+    """
+    card_name = None
+    dev_num = 0
+
+    if not audio_device or audio_device == "default":
+        # Auto-detect best HDMI card, fallback to first available
+        devs = get_audio_devices()
+        hdmi_dev = next((d for d in devs if d.get("type") == "hdmi"), None)
+        if hdmi_dev and "CARD=" in hdmi_dev.get("id", ""):
+            audio_device = hdmi_dev.get("id")
+
+    if audio_device and "CARD=" in audio_device:
+        m = re.search(r"CARD=([^,]+)", audio_device)
+        if m:
+            card_name = m.group(1).strip()
+        m_dev = re.search(r"DEV=(\d+)", audio_device)
+        if m_dev:
+            dev_num = m_dev.group(1).strip()
+
+    if not card_name:
+        return
+
+    asound_content = f"""# dbsKioskPi - System ALSA Default Audio Routing
+pcm.!default {{
+    type plug
+    slave.pcm "hw:CARD={card_name},DEV={dev_num}"
+}}
+
+ctl.!default {{
+    type hw
+    card {card_name}
+}}
+"""
+    try:
+        with open("/etc/asound.conf", "w", encoding="utf-8") as f:
+            f.write(asound_content)
+        os.chmod("/etc/asound.conf", 0o644)
+    except Exception:
+        pass
+
+    for user_dir in ["/home/dbsadmin", "/home/pi"]:
+        if os.path.exists(user_dir):
+            try:
+                rc_path = os.path.join(user_dir, ".asoundrc")
+                with open(rc_path, "w", encoding="utf-8") as f:
+                    f.write(asound_content)
+                os.chmod(rc_path, 0o644)
+                st = os.stat(user_dir)
+                os.chown(rc_path, st.st_uid, st.st_gid)
+            except Exception:
+                pass
+
+
 def save_config_value(key, value):
     """Updates or appends a key in kiosk.conf."""
     lines = []
@@ -314,6 +377,8 @@ def save_config_value(key, value):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
     log_config_event(f"Einstellung geändert: {key} = {value}")
+    if key == "AUDIO_DEVICE":
+        apply_system_asound_conf(value)
 
 
 def authenticate(username, password):
@@ -587,7 +652,7 @@ class KioskAPIHandler(BaseHTTPRequestHandler):
 
             data = {
                 "service": "dbsKioskPi",
-                "version": "1.7.2",
+                "version": "1.7.3",
                 "kiosk_service": kiosk_active,
                 "screen_power": cec_power,
                 "cec_enabled": cfg.get("CEC_ENABLED", "true") == "true",
@@ -1006,6 +1071,13 @@ def bell_scheduler_loop():
 def run_server():
     os.makedirs(SOUNDS_DIR, exist_ok=True)
     os.makedirs("/var/lib/dbskiosk", exist_ok=True)
+
+    # Ensure system audio routing matches configured device (or best HDMI)
+    try:
+        cfg = read_config()
+        apply_system_asound_conf(cfg.get("AUDIO_DEVICE", "default"))
+    except Exception:
+        pass
 
     # Start background scheduler thread
     scheduler_thread = threading.Thread(target=bell_scheduler_loop, daemon=True)

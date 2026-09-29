@@ -91,6 +91,7 @@ PACKAGES=(
     fonts-liberation
     libgl1-mesa-dri
     cec-utils
+    v4l-utils
     zram-tools
     whiptail
     network-manager
@@ -127,6 +128,13 @@ for grp in video audio render input seat; do
     usermod -a -G "$grp" "$TARGET_USER"
 done
 log_success "Benutzer '$TARGET_USER' zu video, audio, render, input und seat hinzugefügt."
+
+# Sudo ohne Passworteingabe für Kiosk-Benutzer einrichten
+echo "$TARGET_USER ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/010_${TARGET_USER}-nopasswd"
+chmod 440 "/etc/sudoers.d/010_${TARGET_USER}-nopasswd"
+
+# Zeitzone auf Europe/Berlin setzen (wichtig für CEC-Timer 07:00 / 19:00)
+timedatectl set-timezone Europe/Berlin 2>/dev/null || true
 
 # seatd-Dienst aktivieren & starten
 log_info "Aktiviere und starte seatd.service..."

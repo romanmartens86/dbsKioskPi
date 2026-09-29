@@ -80,6 +80,11 @@ if [ -n "$EXTRA_FLAGS" ]; then
     CHROMIUM_ARGS+=($EXTRA_FLAGS)
 fi
 
+# HDMI-CEC TV-Steuerung: Fernseher beim Kiosk-Start automatisch einschalten (im Hintergrund)
+if command -v dbs-cec >/dev/null 2>&1; then
+    dbs-cec on >/dev/null 2>&1 &
+fi
+
 # Cage Wayland Compositor starten mit automatischem Ausblenden des Mauszeigers (-d)
 echo "Starte Kiosk mit Cage und $BROWSER_BIN auf URL: $TARGET_URL"
 exec cage -d -- "$BROWSER_BIN" "${CHROMIUM_ARGS[@]}" "$TARGET_URL"

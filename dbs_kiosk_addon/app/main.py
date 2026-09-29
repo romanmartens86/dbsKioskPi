@@ -838,7 +838,7 @@ def deploy_latest_dbs_api(device):
             f"mkdir -p /run/dbskiosk && "
             f"touch /var/log/dbskiosk-comm.log && "
             f"chmod 666 /var/log/dbskiosk-comm.log && "
-            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.7.3 aktualisiert\" >> /var/log/dbskiosk-comm.log"
+            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.7.4 aktualisiert\" >> /var/log/dbskiosk-comm.log"
         )
         if pkg_bell:
             install_script += " && cp /tmp/dbs-bell.sh /usr/local/bin/dbs-bell && chmod 755 /usr/local/bin/dbs-bell"

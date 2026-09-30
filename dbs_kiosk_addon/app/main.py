@@ -796,6 +796,8 @@ def deploy_latest_dbs_api(device):
     pkg_input = find_package_file("files/dbs-input.sh")
     pkg_rules = find_package_file("files/99-dbskiosk-input.rules")
     pkg_cec = find_package_file("files/cec-control.sh")
+    pkg_cec_keepalive_srv = find_package_file("files/kiosk-cec-keepalive.service")
+    pkg_cec_keepalive_tmr = find_package_file("files/kiosk-cec-keepalive.timer")
     pkg_bell = find_package_file("files/dbs-bell.sh")
 
     try:
@@ -819,6 +821,10 @@ def deploy_latest_dbs_api(device):
             sftp.put(pkg_rules, "/tmp/99-dbskiosk-input.rules")
         if pkg_cec:
             sftp.put(pkg_cec, "/tmp/cec-control.sh")
+        if pkg_cec_keepalive_srv:
+            sftp.put(pkg_cec_keepalive_srv, "/tmp/kiosk-cec-keepalive.service")
+        if pkg_cec_keepalive_tmr:
+            sftp.put(pkg_cec_keepalive_tmr, "/tmp/kiosk-cec-keepalive.timer")
         if pkg_bell:
             sftp.put(pkg_bell, "/tmp/dbs-bell.sh")
         if os.path.exists(LOCAL_BELL_FILE):
@@ -838,7 +844,7 @@ def deploy_latest_dbs_api(device):
             f"mkdir -p /run/dbskiosk && "
             f"touch /var/log/dbskiosk-comm.log && "
             f"chmod 666 /var/log/dbskiosk-comm.log && "
-            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.7.4 aktualisiert\" >> /var/log/dbskiosk-comm.log"
+            f"echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INIT] dbsKioskPi auf Version 1.7.5 aktualisiert\" >> /var/log/dbskiosk-comm.log"
         )
         if pkg_bell:
             install_script += " && cp /tmp/dbs-bell.sh /usr/local/bin/dbs-bell && chmod 755 /usr/local/bin/dbs-bell"
@@ -856,6 +862,8 @@ def deploy_latest_dbs_api(device):
             install_script += " && cp /tmp/99-dbskiosk-input.rules /etc/udev/rules.d/99-dbskiosk-input.rules && chmod 644 /etc/udev/rules.d/99-dbskiosk-input.rules && udevadm control --reload-rules && udevadm trigger"
         if pkg_cec:
             install_script += " && cp /tmp/cec-control.sh /usr/local/bin/dbs-cec && chmod 755 /usr/local/bin/dbs-cec"
+        if pkg_cec_keepalive_srv and pkg_cec_keepalive_tmr:
+            install_script += " && cp /tmp/kiosk-cec-keepalive.service /etc/systemd/system/ && cp /tmp/kiosk-cec-keepalive.timer /etc/systemd/system/ && chmod 644 /etc/systemd/system/kiosk-cec-keepalive.* && systemctl daemon-reload && systemctl enable --now kiosk-cec-keepalive.timer"
 
         # HDMI Standby Keepalive, ALSA Audio Routing & Hotplug Fix + SD-Kartenschutz (journald volatile)
         install_script += (

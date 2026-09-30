@@ -195,7 +195,11 @@ fi
 
 # HDMI-CEC Steuerung & Timer
 if systemctl is-active --quiet kiosk-cec-on.timer && systemctl is-active --quiet kiosk-cec-off.timer; then
-    check_status "CEC Systemd Timer" 0 "Beide Timer aktiv (07:00 Ein / 19:00 Aus)"
+    if systemctl is-active --quiet kiosk-cec-keepalive.timer; then
+        check_status "CEC Systemd Timer" 0 "Alle 3 Timer aktiv (07:00 Ein / 19:00 Aus / Stündlicher Keep-Alive)"
+    else
+        check_status "CEC Systemd Timer" 0 "Beide Timer aktiv (07:00 Ein / 19:00 Aus)"
+    fi
 else
     check_status "CEC Systemd Timer" 1 "Timer nicht vollständig aktiv"
 fi

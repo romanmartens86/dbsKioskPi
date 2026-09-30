@@ -1,0 +1,10 @@
+[Unit]
+Description=dbsKioskPi - Hourly HDMI-CEC Keep-Alive Signal
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dbs-cec keepalive
+
+[Install]
+WantedBy=multi-user.target

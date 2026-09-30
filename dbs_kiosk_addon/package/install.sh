@@ -351,6 +351,8 @@ cp "$SCRIPT_DIR/files/kiosk-cec-on.service" /etc/systemd/system/
 cp "$SCRIPT_DIR/files/kiosk-cec-on.timer" /etc/systemd/system/
 cp "$SCRIPT_DIR/files/kiosk-cec-off.service" /etc/systemd/system/
 cp "$SCRIPT_DIR/files/kiosk-cec-off.timer" /etc/systemd/system/
+cp "$SCRIPT_DIR/files/kiosk-cec-keepalive.service" /etc/systemd/system/
+cp "$SCRIPT_DIR/files/kiosk-cec-keepalive.timer" /etc/systemd/system/
 chmod 644 /etc/systemd/system/kiosk-cec*
 
 # REST-API Service für Home Assistant kopieren
@@ -374,6 +376,7 @@ log_info "Aktiviere Kiosk-Dienst, CEC-Timer, API-Dienst und Healthcheck..."
 systemctl enable kiosk.service
 systemctl enable --now kiosk-cec-on.timer
 systemctl enable --now kiosk-cec-off.timer
+systemctl enable --now kiosk-cec-keepalive.timer
 systemctl enable --now dbs-api.service
 if [ -f "/etc/systemd/system/kiosk-healthcheck.service" ]; then
     systemctl enable kiosk-healthcheck.service

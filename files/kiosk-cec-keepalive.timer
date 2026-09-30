@@ -1,0 +1,10 @@
+[Unit]
+Description=dbsKioskPi - Timer for Hourly HDMI-CEC Keep-Alive
+PartOf=kiosk-cec-keepalive.service
+
+[Timer]
+OnCalendar=*-*-* *:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

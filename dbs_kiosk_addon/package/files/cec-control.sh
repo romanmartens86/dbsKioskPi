@@ -28,6 +28,41 @@ if command -v vcgencmd >/dev/null 2>&1; then
     vcgencmd display_power 1 >/dev/null 2>&1 || true
 fi
 
+is_in_operating_hours() {
+    local cur_hm on_hm off_hm
+    cur_hm=$(date +%H:%M)
+    on_hm="${CEC_ON_TIME:-07:00}"
+    off_hm="${CEC_OFF_TIME:-19:00}"
+
+    if [ "$on_hm" = "$off_hm" ]; then
+        return 0
+    fi
+
+    # Wenn die aktuelle Uhrzeit exakt der Einschalt- oder Ausschaltzeit entspricht,
+    # überlassen wir die Ausführung dem jeweiligen dedizierten Systemd-Timer
+    if [ "$cur_hm" = "$on_hm" ] || [ "$cur_hm" = "$off_hm" ]; then
+        return 1
+    fi
+
+    local cur_m on_m off_m
+    cur_m=$(( 10#${cur_hm%:*} * 60 + 10#${cur_hm#*:} ))
+    on_m=$(( 10#${on_hm%:*} * 60 + 10#${on_hm#*:} ))
+    off_m=$(( 10#${off_hm%:*} * 60 + 10#${off_hm#*:} ))
+
+    if [ "$on_m" -lt "$off_m" ]; then
+        # Normalfall (z. B. 07:00 bis 19:00)
+        if [ "$cur_m" -ge "$on_m" ] && [ "$cur_m" -lt "$off_m" ]; then
+            return 0
+        fi
+    else
+        # Nachtbetrieb über Mitternacht (z. B. 20:00 bis 06:00)
+        if [ "$cur_m" -ge "$on_m" ] || [ "$cur_m" -lt "$off_m" ]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 cec_wake() {
     # 1. Moderne Linux-Kernel CEC-Schnittstelle (cec-ctl)
     if command -v cec-ctl >/dev/null 2>&1; then
@@ -56,6 +91,24 @@ cec_wake() {
     fi
 }
 
+cec_keepalive() {
+    # 1. Moderne Linux-Kernel CEC-Schnittstelle (cec-ctl)
+    if command -v cec-ctl >/dev/null 2>&1; then
+        echo "[CEC] Sende Keep-Alive via cec-ctl..."
+        cec-ctl -d /dev/cec0 --playback --osd-name KioskPi >/dev/null 2>&1 || true
+        cec-ctl -d /dev/cec0 --to 0 --image-view-on >/dev/null 2>&1 || true
+        cec-ctl -d /dev/cec0 --to 0 --user-control-pressed ui-cmd=power-on-function >/dev/null 2>&1 || true
+        cec-ctl -d /dev/cec0 --to 0 --user-control-released >/dev/null 2>&1 || true
+        cec-ctl -d /dev/cec0 --active-source phys-addr=1.0.0.0 >/dev/null 2>&1 || true
+    fi
+
+    # 2. cec-client Fallback / Ergänzung
+    if command -v cec-client >/dev/null 2>&1; then
+        echo "[CEC] Sende Active-Source via cec-client..."
+        printf "on 0\nas\n" | timeout 8 cec-client -s -d 1 >/dev/null 2>&1 || true
+    fi
+}
+
 cec_standby() {
     if command -v cec-ctl >/dev/null 2>&1; then
         echo "[CEC] Sende Standby via cec-ctl..."
@@ -75,6 +128,20 @@ case "$ACTION" in
         echo "[CEC] Schalte TV ein..."
         cec_wake
         echo "[CEC] TV Einschaltbefehle erfolgreich gesendet."
+        ;;
+    keepalive)
+        if ! is_in_operating_hours; then
+            echo "[CEC] Außerhalb der Betriebszeiten (${CEC_ON_TIME:-07:00} - ${CEC_OFF_TIME:-19:00}). Kein Keep-Alive erforderlich."
+            exit 0
+        fi
+        echo "[CEC] Sende stündliches Keep-Alive Signal an TV..."
+        cec_keepalive
+        echo "[CEC] Keep-Alive Signal erfolgreich gesendet."
+        ;;
+    force-keepalive)
+        echo "[CEC] Sende erzwungenes Keep-Alive Signal an TV..."
+        cec_keepalive
+        echo "[CEC] Keep-Alive Signal erfolgreich gesendet."
         ;;
     off|standby|force-off)
         echo "[CEC] Schalte TV in Standby..."
@@ -98,7 +165,7 @@ case "$ACTION" in
         fi
         ;;
     *)
-        echo "Verwendung: $0 {on|off|standby|status|force-on|force-off}"
+        echo "Verwendung: $0 {on|off|standby|status|keepalive|force-keepalive|force-on|force-off}"
         exit 1
         ;;
 esac

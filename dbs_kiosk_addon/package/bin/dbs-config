@@ -226,12 +226,12 @@ configure_cec() {
             1)
                 if [ "${CEC_ENABLED:-true}" = "true" ]; then
                     sed -i "s|^CEC_ENABLED=.*|CEC_ENABLED=\"false\"|" "$CONFIG_FILE"
-                    systemctl stop kiosk-cec-on.timer kiosk-cec-off.timer 2>/dev/null || true
-                    systemctl disable kiosk-cec-on.timer kiosk-cec-off.timer 2>/dev/null || true
+                    systemctl stop kiosk-cec-on.timer kiosk-cec-off.timer kiosk-cec-keepalive.timer 2>/dev/null || true
+                    systemctl disable kiosk-cec-on.timer kiosk-cec-off.timer kiosk-cec-keepalive.timer 2>/dev/null || true
                     msg_box "CEC Deaktiviert" "HDMI-CEC und die automatischen Timer wurden deaktiviert."
                 else
                     sed -i "s|^CEC_ENABLED=.*|CEC_ENABLED=\"true\"|" "$CONFIG_FILE"
-                    systemctl enable --now kiosk-cec-on.timer kiosk-cec-off.timer 2>/dev/null || true
+                    systemctl enable --now kiosk-cec-on.timer kiosk-cec-off.timer kiosk-cec-keepalive.timer 2>/dev/null || true
                     msg_box "CEC Aktiviert" "HDMI-CEC und die automatischen Timer wurden aktiviert."
                 fi
                 ;;
